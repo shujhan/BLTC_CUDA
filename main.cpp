@@ -1,1 +1,1 @@
-//start main
+start
