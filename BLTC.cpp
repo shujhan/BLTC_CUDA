@@ -1,4 +1,5 @@
 #include "BLTC.hpp"
+#include<cmath>
 
 #include <iostream>
 using std::cout, std::endl;
@@ -46,3 +47,9 @@ void split_panel(panel *p, double* source_particles){
 
 }
 
+void init_modified_weights(panel *p, double *source_particles, double *weights, size_t source_size){
+    // Calculate Chebyshev points
+    for (int k=0;k<PP;k++){
+        p->s[k] = 0.5 * ( p->xinterval[0] + p->xinterval[1] + std::cos(k*pi/PP)*( p->xinterval[1] - p->xinterval[0]  ));
+    }
+}

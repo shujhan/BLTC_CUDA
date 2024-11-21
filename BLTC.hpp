@@ -23,6 +23,8 @@ struct panel
 {
 //    size_t members[2]; // Start and end indicies of contained particles
     std::vector<size_t> members;
+    double weights[PP];
+    double s[PP];
     double xinterval[2];
     double xc; // Panel center x coordinate
 //    panel *children[2];
@@ -39,5 +41,7 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
 
 // Called recursivley from root panel to build tree
 void split_panel(panel *p, double* source_particles);
+
+void init_modified_weights(panel *p, double *source_particles, double *weights, size_t source_size);
 
 #endif

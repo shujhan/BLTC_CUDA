@@ -48,7 +48,7 @@ int main(int argc, char** argv) {
     root.xc = 0.0;
     root.level = 0;
 
-    split_panel(&root, locs, N);
+    split_panel(&root, locs);
 
 
 //    cout << "interval[0] \t interval[1] \t xc \t level  " << endl;
