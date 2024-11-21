@@ -38,6 +38,6 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
         size_t e_field_size, size_t source_size, size_t target_size);
 
 // Called recursivley from root panel to build tree
-void split_panel(panel *p, double* source_particles, size_t source_size);
+void split_panel(panel *p, double* source_particles);
 
 #endif
