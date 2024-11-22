@@ -2,7 +2,9 @@
 #include<cmath>
 
 #include <iostream>
+#include <iomanip>
 using std::cout, std::endl;
+using namespace std;
 
 void split_panel(panel *p, double* source_particles){
 
@@ -49,7 +51,51 @@ void split_panel(panel *p, double* source_particles){
 
 void init_modified_weights(panel *p, double *source_particles, double *weights, size_t source_size){
     // Calculate Chebyshev points
-    for (int k=0;k<PP;k++){
+    for (int k=0;k < PP;k++){
         p->s[k] = 0.5 * ( p->xinterval[0] + p->xinterval[1] + std::cos(k*pi/PP)*( p->xinterval[1] - p->xinterval[0]  ));
+    }
+
+    double w1[PP]; 
+    for (int i = 0; i < PP; i++) {
+        if (i == 0 || i == (PP-1)) {
+            w1[i] = 0.5;
+        }
+        else {
+            w1[i] = 1.0;
+        }
+        if (i % 2 == 1) {
+            w1[i] *= 1.0;
+        }
+    }
+    
+    double a1[PP]; // the clartiy term in paper 
+    double sum;
+
+    // set up modified weights 
+    for (int k = 0; k < p->members.size(); k++) {
+        double y = source_particles[p->members[k]]; // particles in cluster
+        int flag = -1;
+        for (int i = 0; i < PP; i++) {
+            if(fabs(y - p->s[i]) <= DBL_MIN) {
+                flag = i;
+            }
+            else{
+                a1[i] = w1[i] /(y - p->s[i]);
+                sum += a1[i];
+            }
+        }
+
+        if (flag > -1) {
+            sum = 1.0;
+            for (int j = 0; j < PP; j++) {
+                a1[j] = 0.0;
+            }  
+            a1[flag] = 1.0;
+        }
+
+        double D = 1.0 / sum;
+        for (int i = 0; i < PP; i++) {
+            p->weights[i] += a1[i] * D * weights[i]
+        }
     }
 }
