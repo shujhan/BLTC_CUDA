@@ -31,9 +31,11 @@ int main(int argc, char** argv) {
     const size_t N = 10; 
     const double dx = L/N;
     
+
+    // initialzied root using new 
     panel root;
     double locs[N];
-    for (size_t k=0;k<N;k++){
+    for (size_t k = 0; k < N; k++){
         // Maybe need to handle nondistinct particles
         locs[k] = sin( 2*pi/L * k * dx ) + k*dx;
         root.members.push_back(k);

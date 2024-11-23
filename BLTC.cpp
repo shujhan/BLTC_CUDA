@@ -64,17 +64,18 @@ void init_modified_weights(panel *p, double *source_particles, double *weights, 
             w1[i] = 1.0;
         }
         if (i % 2 == 1) {
-            w1[i] *= 1.0;
+            w1[i] *= -1.0;
         }
     }
     
     double a1[PP]; // the clartiy term in paper 
-    double sum;
+   
 
     // set up modified weights 
     for (int k = 0; k < p->members.size(); k++) {
         double y = source_particles[p->members[k]]; // particles in cluster
         int flag = -1;
+        double sum = 0.0;
         for (int i = 0; i < PP; i++) {
             if(fabs(y - p->s[i]) <= DBL_MIN) {
                 flag = i;
@@ -95,7 +96,7 @@ void init_modified_weights(panel *p, double *source_particles, double *weights, 
 
         double D = 1.0 / sum;
         for (int i = 0; i < PP; i++) {
-            p->weights[i] += a1[i] * D * weights[i]
+            p->weights[i] += a1[i] * D * weights[i];
         }
     }
 }
