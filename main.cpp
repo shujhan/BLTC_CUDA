@@ -14,7 +14,7 @@ using namespace std;
 
 void treeprint(panel *p){
     cout << p->xinterval[0] << "\t" << p->xinterval[1] << "\t" << p->xc << "\t" << p->level << "\t";
-    for (size_t k=0; k<p->members.size();k++){
+    for (size_t k=0; k<p->num_members;k++){
         cout << p->members[k] << "\t";
     }
     cout << endl;
@@ -37,8 +37,9 @@ int main(int argc, char** argv) {
     double locs[N];
     for (size_t k = 0; k < N; k++){
         // Maybe need to handle nondistinct particles
-        locs[k] = sin( 2*pi/L * k * dx ) + k*dx;
-        root.members.push_back(k);
+        //locs[k] = sin( 2*pi/L * k * dx ) + k*dx;
+        locs[k] = k*dx;
+        root.members[k] = k;
 //        cout << locs[k] << "\t";
     }
 //    cout << endl;
@@ -49,8 +50,16 @@ int main(int argc, char** argv) {
     root.xinterval[1] = 2;
     root.xc = 0.0;
     root.level = 0;
+    root.num_members = N;
 
-    split_panel(&root, locs);
+    int tree_size = 1;
+    int leaf_size = 0;
+
+    cout << "Calling split panel" << endl;
+
+    split_panel(&root, locs, &tree_size, &leaf_size);
+
+    cout << "Tree size = " << tree_size << endl << " Leaf size = " << leaf_size << endl;
 
 
 //    cout << "interval[0] \t interval[1] \t xc \t level  " << endl;

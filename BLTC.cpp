@@ -6,7 +6,7 @@
 using std::cout, std::endl;
 using namespace std;
 
-void split_panel(panel *p, double* source_particles){
+void split_panel(panel *p, double* source_particles, int *tree_size, int *leaf_size){
 
     panel *left_child = new panel();
     panel *right_child = new panel();
@@ -39,15 +39,23 @@ void split_panel(panel *p, double* source_particles){
     p->left_child = left_child;
     p->right_child = right_child;
 
+    *tree_size += 2;
 
     if( left_child->members.size() > N0  ){
-        split_panel(p->left_child, source_particles);
+        split_panel(p->left_child, source_particles, tree_size, leaf_size);
+    }
+    else{
+        *leaf_size += 1;
     }
     if (right_child->members.size() > N0 ){
-        split_panel(p->right_child, source_particles);
+        split_panel(p->right_child, source_particles, tree_size, leaf_size);
+    }
+    else{
+        *leaf_size += 1;
     }
 
 }
+
 
 void init_modified_weights(panel *p, double *source_particles, double *weights, size_t source_size){
     // Calculate Chebyshev points
@@ -70,6 +78,10 @@ void init_modified_weights(panel *p, double *source_particles, double *weights, 
     
     double a1[PP]; // the clartiy term in paper 
    
+    // Initilize modified weights to zero
+    for (int k = 0; k<PP; k++){
+        p->modified_weights[k] = 0.0;
+    }
 
     // set up modified weights 
     for (int k = 0; k < p->members.size(); k++) {
@@ -96,7 +108,25 @@ void init_modified_weights(panel *p, double *source_particles, double *weights, 
 
         double D = 1.0 / sum;
         for (int i = 0; i < PP; i++) {
-            p->weights[i] += a1[i] * D * weights[i];
+            p->modified_weights[i] += a1[i] * D * weights[p->members[i]];
         }
+    }
+}
+
+void init_tree_list(panel *p, vector<panel> tree_list, int *current_id, vector<int> leaf_indicies){
+    
+    p->id = *current_id;
+    tree_list.push_back(*p);
+    *current_id += 1;
+
+    if (p->left_child){
+        init_tree_list(p->left_child, tree_list, current_id, leaf_indicies);
+    }
+    if (p->right_child){
+        init_tree_list(p->right_child, tree_list, current_id, leaf_indicies);
+    }
+   // Handle leafs
+    if (!(p->left_child) && !(p->right_child)){
+        leaf_indicies.push_back(*current_id - 1 );
     }
 }

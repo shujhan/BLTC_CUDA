@@ -3,6 +3,7 @@
 
 #include<cstddef>
 #include<vector>
+#include<cfloat>
 
 // Set numerical paramters
 static const size_t numpars_s = 10000;  // num particles
@@ -21,17 +22,17 @@ typedef struct panel panel;
 
 struct panel
 {
-//    size_t members[2]; // Start and end indicies of contained particles
-    std::vector<size_t> members;
-    double weights[PP];
-    double s[PP];
-    double xinterval[2];
+    size_t members[N0]; // indicies of particles in source_parirticles
+    int num_members;
+    double modified_weights[PP]; // modified weights
+    double s[PP]; // mapped Chebyshev points in the cluster
+    double xinterval[2]; // start and end x position
     double xc; // Panel center x coordinate
-//    panel *children[2];
-    panel *left_child;
+    panel *left_child; // These pointers will not work on the device b/c they point to host versions
     panel *right_child;
     panel *parent;
     int level;
+    int id;
     
 };
 
@@ -40,8 +41,10 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
         size_t e_field_size, size_t source_size, size_t target_size);
 
 // Called recursivley from root panel to build tree
-void split_panel(panel *p, double* source_particles);
+void split_panel(panel *p, double* source_particles, int *tree_size, int *leaf_size);
 
 void init_modified_weights(panel *p, double *source_particles, double *weights, size_t source_size);
+
+void init_tree_list(panel *p, std::vector<panel> tree_list, int *current_id, std::vector<int> leaf_indicies);
 
 #endif
