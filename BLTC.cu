@@ -9,6 +9,20 @@ using namespace std;
 
 #define TESTFLAG 1 
 
+/* split panel
+ *
+ * Creates the left and right children of the passed panel p.  If these children are 
+ * too large and must themselves be split again, the function is called recursivley.
+ * The entire tree can be constructed by passing in the root panel.  In this case
+ * tree_size will contain the total number of panels in the tree (minus the root) and
+ * leaf_size will contain the number of leaves.
+ *
+ * This function assumes that xinterval, xc, level, members, and num_members are set in p.
+ * It will set these values, set the parent of both children to be p and left_child and
+ * right_child of p, initilize near_ids and far_ids to -1, and set the Chebyshev points.  
+ * The id and modified_weights attributes are not set.
+ *
+ */
 void split_panel(panel *p, double* source_particles, int *tree_size, int *leaf_size){
 
     panel *left_child = new panel();
@@ -156,6 +170,7 @@ void init_interaction_lists(panel* leaf, panel* source_panel, int *near_index, i
     if (!source_panel->left_child){
         leaf->near_ids[*near_index] = source_panel->id;
         *near_index += 1;
+        leaf->near_size += 1;
     }
     else{
         double leaf_radius = leaf->xc - leaf->xinterval[0];
@@ -168,6 +183,7 @@ void init_interaction_lists(panel* leaf, panel* source_panel, int *near_index, i
         if ( (leaf_radius + source_radius) / distance < MAC){
             leaf->far_ids[*far_index] = source_panel->id;
             *far_index += 1;
+            leaf->far_size += 1;
         }
         else{
             init_interaction_lists(leaf, source_panel->left_child, near_index, far_index);
@@ -252,6 +268,36 @@ void init_tree_list(panel *p, panel *tree_list, int *current_id, int *leaf_indic
     }
 }
 
+__device__ double kernel(double x, double y){
+    return x*y;
+}
+
+__global__ void computesum(double *e_field, panel *tree_list, int *leaf_indicies, double *source_particles, double *weights, size_t leaf_size){
+    int idx = blockIdx.x*blockDim.x + threadIdx.x;
+
+    if(idx >= leaf_size) {return;}
+
+    panel leaf_panel = tree_list[leaf_indicies[idx]];
+
+   for (size_t particlei=0;particlei<leaf_panel.num_members;particlei++){
+        double px = source_particles[leaf_panel.members[particlei]];
+        for(size_t k=0;k<leaf_panel.far_size;k++){
+            panel far_panel = tree_list[leaf_panel.far_ids[k]];
+            for (size_t j=0;j<PP;j++){
+                e_field[leaf_panel.members[particlei]] += kernel(px, far_panel.s[j]) * far_panel.modified_weights[j];
+            }
+       } 
+
+        for(size_t k=0;k<leaf_panel.near_size;k++){
+            panel near_panel = tree_list[leaf_panel.near_ids[k]];
+            for (size_t j=0;j<near_panel.num_members;j++){
+                e_field[leaf_panel.members[particlei]] += kernel(px, source_particles[near_panel.members[j]]) * weights[near_panel.members[j]];
+            }
+        }
+    }
+
+}
+
 void push_to_device(panel *tree, double *source_particles, double *source_weights, int num_panels, int num_particles, panel *d_tree_list, double *d_particles, double *d_weights){
    cudaError_t errcode;
 
@@ -284,6 +330,10 @@ void push_to_device(panel *tree, double *source_particles, double *source_weight
    }
 }
 
+// TODO
+// Set xinterval and xc of root automatically
+// Deal with more particles
+
 void BLTC(double *e_field, double *source_particles, double *target_particles, double *weights, 
         size_t e_field_size, size_t source_size, size_t target_size){
 
@@ -293,9 +343,9 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     for (size_t k=0; k<source_size; k++){
         root.members[k] = k;
     }
-    root.xinterval[0] = 0.0;
-    root.xinterval[1] = L;
-    root.xc = L/2;
+    root.xinterval[0] = -1.5*L;
+    root.xinterval[1] = 1.5*L;
+    root.xc = 0.0;
     root.level = 0;
     root.num_members = source_size;
     for (int k=0;k<PP;k++){
@@ -365,6 +415,8 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     panel *d_tree_list;
     double *d_particles;
     double *d_weights;
+    double *d_efield;
+    int *d_leaf_indicies;
 
     cudaError_t errcode;
 
@@ -380,7 +432,14 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     if (errcode != cudaSuccess){
          cout << "Failed to allocate weights on device with code " << errcode << " " << cudaGetErrorString(errcode) <<endl;
     }
- 
+    errcode = cudaMalloc(&d_efield, target_size*sizeof(double));
+    if (errcode != cudaSuccess){
+         cout << "Failed to allocate weights on device with code " << errcode << " " << cudaGetErrorString(errcode) <<endl;
+    }
+    errcode = cudaMalloc(&d_leaf_indicies, leaf_size*sizeof(int));
+    if (errcode != cudaSuccess){
+         cout << "Failed to allocate leaf indicies on device with code " << errcode << " " << cudaGetErrorString(errcode) <<endl;
+    }
     errcode = cudaMemcpy(d_tree_list, tree_list, tree_size*sizeof(panel), cudaMemcpyHostToDevice);
     if (errcode != cudaSuccess){
          cout << "Failed to transfer tree to device with code " << errcode << " " << cudaGetErrorString(errcode) <<endl;
@@ -394,6 +453,10 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     errcode = cudaMemcpy(d_weights, weights, source_size*sizeof(double), cudaMemcpyHostToDevice);
     if (errcode != cudaSuccess){
          cout << "Failed to transfer particle weights to device with code " << errcode << " " << cudaGetErrorString(errcode) <<endl;
+    }
+    errcode = cudaMemcpy(d_leaf_indicies, leaf_indicies, leaf_size*sizeof(int), cudaMemcpyHostToDevice);
+    if (errcode != cudaSuccess){
+         cout << "Failed to transfer leaf indicies to device with code " << errcode << " " << cudaGetErrorString(errcode) <<endl;
     }
 
    // push_to_device(tree_list, source_particles, weights, tree_size, source_size, d_tree_list, d_particles, d_weights);
@@ -416,5 +479,13 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     }
     cout << endl;
 #endif
+
+    gridlen = (leaf_size + blocksize - 1) / blocksize;
+    computesum<<<gridlen,blocksize>>>(d_efield, d_tree_list, d_leaf_indicies, d_particles, d_weights, leaf_size);
+
+    errcode = cudaMemcpy(e_field, d_efield, target_size*sizeof(double), cudaMemcpyDeviceToHost);
+    if (errcode != cudaSuccess){
+        cout << "Failed to transfer calculated e_field to host with code " << errcode << " " << cudaGetErrorString(errcode) << endl;
+    }
 
 }

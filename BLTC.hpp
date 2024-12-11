@@ -8,7 +8,7 @@
 // Set numerical paramters
 static const size_t numpars_s = 10000;  // num particles
 static const size_t N0 = 2; // Max points in a leaf
-static const size_t Nmax = 10; // Max particles in a panel
+static const size_t Nmax = 20; // Max particles in a panel
 //static const max_level = 10;
 static const double pi = 3.14159265358979323846;
 static const int P = 6; // Order of Far-field approximation
@@ -37,6 +37,8 @@ struct panel
     // Assign dynamically in future
     int near_ids[Nmax];
     int far_ids[Nmax];
+    size_t near_size;
+    size_t far_size;
     
 };
 

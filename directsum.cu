@@ -2,7 +2,7 @@
 using std::cout;
 using std::endl;
 
-#define TIMEFLAG 1 // For extra timing output
+#define TIMEFLAG 0 // For extra timing output
 
 #if TIMEFLAG
 #include<ctime>
