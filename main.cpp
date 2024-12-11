@@ -38,7 +38,7 @@ int main(int argc, char** argv) {
     for (size_t k = 0; k < N; k++){
         // Maybe need to handle nondistinct particles
         //locs[k] = sin( 2*pi/L * k * dx ) + k*dx;
-        locs[k] = k*dx;
+        locs[k] = ((int)k)*dx;
         root.members[k] = k;
 //        cout << locs[k] << "\t";
     }
@@ -46,9 +46,9 @@ int main(int argc, char** argv) {
 
     //root.members[0] = 0;
     //root.members[1] = N-1;
-    root.xinterval[0] = -2;
-    root.xinterval[1] = 2;
-    root.xc = 0.0;
+    root.xinterval[0] = 0;
+    root.xinterval[1] = L;
+    root.xc = L/2;
     root.level = 0;
     root.num_members = N;
 
@@ -65,5 +65,15 @@ int main(int argc, char** argv) {
 //    cout << "interval[0] \t interval[1] \t xc \t level  " << endl;
 
 //    treeprint(&root);
+    
+    double e_field[N];
+    double weights[N];
+    for (int k=0;k<N;k++){
+        weights[k] = 1.0;
+    }
+
+    cout << "Calling BLTC" << endl;
+    BLTC(e_field, locs, locs, weights, N, N, N);
+    cout << "Finished BLTC" << endl;
 
 }
