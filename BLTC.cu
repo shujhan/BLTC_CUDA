@@ -370,30 +370,30 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
 
     errcode = cudaMalloc(&d_tree_list, tree_size*sizeof(panel));
     if (errcode != cudaSuccess){
-         cout << "Failed to allocate tree on device with code " << errcode << endl;
+         cout << "Failed to allocate tree on device with code " << errcode << " " << cudaGetErrorString(errcode) <<endl;
     }
     errcode = cudaMalloc(&d_particles, source_size*sizeof(double));
     if (errcode != cudaSuccess){
-         cout << "Failed to allocate particles on device with code " << errcode << endl;
+         cout << "Failed to allocate particles on device with code " << errcode << " " << cudaGetErrorString(errcode) <<endl;
     }
     errcode = cudaMalloc(&d_weights, source_size*sizeof(double));
     if (errcode != cudaSuccess){
-         cout << "Failed to allocate weights on device with code " << errcode << endl;
+         cout << "Failed to allocate weights on device with code " << errcode << " " << cudaGetErrorString(errcode) <<endl;
     }
  
     errcode = cudaMemcpy(d_tree_list, tree_list, tree_size*sizeof(panel), cudaMemcpyHostToDevice);
     if (errcode != cudaSuccess){
-         cout << "Failed to transfer tree to device with code " << errcode << endl;
+         cout << "Failed to transfer tree to device with code " << errcode << " " << cudaGetErrorString(errcode) <<endl;
     }
  
     errcode = cudaMemcpy(d_particles, source_particles, source_size*sizeof(double), cudaMemcpyHostToDevice);
     if (errcode != cudaSuccess){
-         cout << "Failed to transfer particles to device with code " << errcode << endl;
+         cout << "Failed to transfer particles to device with code " << errcode << " " << cudaGetErrorString(errcode) <<endl;
     }
  
     errcode = cudaMemcpy(d_weights, weights, source_size*sizeof(double), cudaMemcpyHostToDevice);
     if (errcode != cudaSuccess){
-         cout << "Failed to transfer particle weights to device with code " << errcode << endl;
+         cout << "Failed to transfer particle weights to device with code " << errcode << " " << cudaGetErrorString(errcode) <<endl;
     }
 
    // push_to_device(tree_list, source_particles, weights, tree_size, source_size, d_tree_list, d_particles, d_weights);
@@ -402,15 +402,19 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     int gridlen = (source_size + blocksize - 1) / blocksize;
     init_modified_weights<<<gridlen,blocksize>>>(d_tree_list, d_particles, d_weights, source_size, tree_size);
 
+#if TESTFLAG
     errcode = cudaMemcpy(tree_list, d_tree_list, tree_size*sizeof(panel), cudaMemcpyDeviceToHost);
     if (errcode != cudaSuccess){
          cout << "Failed to transfer particle weights from device with code " << errcode << " " << cudaGetErrorString(errcode)  << endl;
     }
     for(int k=0;k<tree_size;k++){
+        cout << "Modified weights for panel " << k << endl;
         for (int j=0;j<PP;j++){
             cout << tree_list[k].modified_weights[j] << "\t";
         }
         cout << endl;
     }
+    cout << endl;
+#endif
 
 }

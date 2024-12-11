@@ -11,6 +11,7 @@
 using namespace std;
 
 #include "BLTC.hpp"
+#include "directsum.hpp"
 
 void treeprint(panel *p){
     cout << p->xinterval[0] << "\t" << p->xinterval[1] << "\t" << p->xc << "\t" << p->level << "\t";
@@ -72,8 +73,23 @@ int main(int argc, char** argv) {
         weights[k] = 1.0;
     }
 
+
     cout << "Calling BLTC" << endl;
     BLTC(e_field, locs, locs, weights, N, N, N);
     cout << "Finished BLTC" << endl;
+
+    cout << endl << "Calling direct sum" << endl;
+    directsum(e_field, locs, locs, weights, N, N);
+    cout << "Finished direct sum, result is" << endl;
+    for(size_t k=0;k<N;k++){
+        cout << "e[" << k << "] = " << e_field[k] << endl;
+    }
+
+    cout << endl << "Calling direct sum serial" << endl;
+    directsum_serial(e_field, locs, locs, weights, N, N);
+    cout << "Finished direct sum serial, result is" << endl;
+    for(size_t k=0;k<N;k++){
+        cout << "e[" << k << "] = " << e_field[k] << endl;
+    }
 
 }
