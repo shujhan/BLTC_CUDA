@@ -30,7 +30,7 @@ void treeprint(panel *p){
 
 int main(int argc, char** argv) {
     const double L = 1.0;
-    const size_t N = 15; 
+    const size_t N = 10; 
     const double dx = L/N;
     
 
@@ -39,34 +39,11 @@ int main(int argc, char** argv) {
     double locs[N];
     for (size_t k = 0; k < N; k++){
         // Maybe need to handle nondistinct particles
-        locs[k] = sin( 2*pi/L * k * dx ) + k*dx;
+        locs[k] = std::fmod( 0.5 * cos( 2*pi/L * k * dx ) + k*dx, L );
+        while(locs[k] < 0){ locs[k] += L;  }
+        cout << k << "\t" << locs[k] << endl;
        // locs[k] = ((int)k)*dx;
-//        root.members[k] = k;
-//        cout << locs[k] << "\t";
     }
-//    cout << endl;
-
-    //root.members[0] = 0;
-    //root.members[1] = N-1;
-/*    root.xinterval[0] = -2*L;
-    root.xinterval[1] = 2*L;
-    root.xc = 0.0;
-    root.level = 0;
-    root.num_members = N;
-
-    int tree_size = 1;
-    int leaf_size = 0;
-
-    cout << "Calling split panel" << endl;
-
-    split_panel(&root, locs, &tree_size, &leaf_size);
-
-    cout << "Tree size = " << tree_size << endl << " Leaf size = " << leaf_size << endl;
-*/
-
-//    cout << "interval[0] \t interval[1] \t xc \t level  " << endl;
-
-//    treeprint(&root);
     
     double e_field[N];
     double weights[N];
@@ -97,7 +74,7 @@ int main(int argc, char** argv) {
     cout << "Direct sum parallel time (ms): " << duration.count() << endl;
     cout << "Finished direct sum, result is" << endl;
     for(size_t k=0;k<N;k++){
-        cout << "e[" << k << "] = " << setprecision(16) << e_field[k] << endl;
+        cout << "e[" << k << "] = " << setprecision(16) << direct_e_par[k] << endl;
     }
 
     cout << endl << "Calling direct sum serial" << endl;
@@ -108,7 +85,7 @@ int main(int argc, char** argv) {
     cout << "Direct sum serial time (ms): " << duration.count() << endl;
     cout << "Finished direct sum serial, result is" << endl;
     for(size_t k=0;k<N;k++){
-        cout << "e[" << k << "] = " << setprecision(16) << e_field[k] << endl;
+        cout << "e[" << k << "] = " << setprecision(16) << direct_e[k] << endl;
     }
 
     cout << endl << "Error: ";

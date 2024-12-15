@@ -1,4 +1,6 @@
+//#include "kernel.cuh"
 #include<iostream>
+#include<cmath>
 using std::cout;
 using std::endl;
 
@@ -8,12 +10,36 @@ using std::endl;
 #include<ctime>
 #endif
 
+/*
 __device__ void kernel(double *res, double x, double y){
-    res[0] = x*y;
+//    double const eps = 1e-3;
+//    double z = x - y;
+//    res[0] = 0.5 * z * sqrt(1 + 4 * eps * eps) / sqrt( z*z + eps*eps  ) - z;
+    res[0] = sqrt(y);
 }
 
 double kernel_serial(double x, double y){
-    return x*y;
+//    double const eps = 1e-3;
+//    double z = x - y;
+//    return 0.5 * z * std::sqrt(1 + 4 * eps * eps) / std::sqrt( z*z + eps*eps  ) - z;
+    return sqrt(y);
+}
+*/
+
+__device__ double kernelp(double x, double y){
+    double const eps = 1e-3;
+    double z = x - y;
+    z = z - round(z);
+    return 0.5 * z * sqrt(1 + 4 * eps * eps) / sqrt( z*z + eps*eps  ) - z;
+   // return sqrt(x*y);
+}
+
+double kernels(double x, double y){
+    double const eps = 1e-3;
+    double z = x - y;
+    z = z - round(z);
+    return 0.5 * z * sqrt(1 + 4 * eps * eps) / sqrt( z*z + eps*eps  ) - z;
+    //return sqrt(x*y);
 }
 
 __global__ void direct_e_sum(double *d_efield, double *d_particles, double *d_target, double *d_weights,
@@ -24,11 +50,9 @@ __global__ void direct_e_sum(double *d_efield, double *d_particles, double *d_ta
    if (idx >= target_size){return;}
 
    double target_loc = d_target[idx];
-   double kernel_res;
 
    for (size_t k=0; k<source_size;k++){
-       kernel(&kernel_res, target_loc, d_particles[k]);
-       d_efield[idx] += kernel_res * d_weights[k];
+       d_efield[idx] += kernelp(target_loc, d_particles[k]) * d_weights[k];
    }
 }
 
@@ -45,7 +69,7 @@ void directsum_serial(double *e_field, double *source_particles, double *target_
 
     for (size_t k=0;k<target_size;k++){
         for (size_t j=0;j<source_size;j++){
-            e_field[k] += kernel_serial(target_particles[k], source_particles[j])*weights[j];
+            e_field[k] += kernels(target_particles[k], source_particles[j])*weights[j];
         }
     }
 
@@ -105,7 +129,7 @@ void directsum(double *e_field, double *source_particles, double *target_particl
     }
 
     
-    int blocksize = 1024;
+    int blocksize = 128;
     int gridlen = target_size / blocksize;
     if (target_size % blocksize != 0) {gridlen++;}
 

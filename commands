@@ -1,0 +1,2 @@
+nvcc -arch=native BLTC.cu directsum.cu main.cpp
+compute-sanitizer --tool memcheck a.out
