@@ -8,7 +8,7 @@
 using std::cout, std::endl;
 using namespace std;
 
-#define TESTFLAG 1 
+#define TESTFLAG 0 
 
 /* split panel
  *
@@ -100,6 +100,12 @@ void split_panel(panel *p, double* source_particles, int *tree_size, int *leaf_s
         *leaf_size += 1;
     }
 
+}
+
+void free_tree_list(panel *panel){
+    if(panel->left_child){free_tree_list(panel->left_child);}
+    if(panel->right_child){free_tree_list(panel->right_child);}
+    free(panel);
 }
 
 __global__ void init_modified_weights(panel* d_tree_list, double *d_particles, double *d_weights, int source_size, int tree_size){
@@ -220,6 +226,29 @@ __device__ double kernel(double x, double y){
 
 }
 
+__global__ void computepanelsum(double *e_field, panel leaf_panel, panel *tree_list, double *source_particles, double *weights){
+    int idx = blockIdx.x*blockDim.x + threadIdx.x;
+
+    if(idx >= leaf_panel.num_members){return;}
+
+    int member_idx = leaf_panel.members[idx];
+    double px = source_particles[member_idx];
+
+    for(size_t k=0;k<leaf_panel.far_size;k++){
+            panel far_panel = tree_list[leaf_panel.far_ids[k]];
+            for (size_t j=0;j<PP;j++){
+                e_field[member_idx] += kernel(px, far_panel.s[j]) * far_panel.modified_weights[j];
+            }
+       } 
+
+    for(size_t k=0;k<leaf_panel.near_size;k++){
+        panel near_panel = tree_list[leaf_panel.near_ids[k]];
+        for (size_t j=0;j<near_panel.num_members;j++){
+            e_field[member_idx] += kernel(px, source_particles[near_panel.members[j]]) * weights[near_panel.members[j]];
+        }
+    }
+}
+
 __global__ void computesum(double *e_field, panel *tree_list, int *leaf_indicies, double *source_particles, double *weights, size_t leaf_size){
     int idx = blockIdx.x*blockDim.x + threadIdx.x;
 
@@ -227,24 +256,13 @@ __global__ void computesum(double *e_field, panel *tree_list, int *leaf_indicies
 
     panel leaf_panel = tree_list[leaf_indicies[idx]];
 
-   for (size_t particlei=0;particlei<leaf_panel.num_members;particlei++){
-        double px = source_particles[leaf_panel.members[particlei]];
-        for(size_t k=0;k<leaf_panel.far_size;k++){
-            panel far_panel = tree_list[leaf_panel.far_ids[k]];
-            for (size_t j=0;j<PP;j++){
-                e_field[leaf_panel.members[particlei]] += kernel(px, far_panel.s[j]) * far_panel.modified_weights[j];
-            }
-       } 
-
-        for(size_t k=0;k<leaf_panel.near_size;k++){
-            panel near_panel = tree_list[leaf_panel.near_ids[k]];
-            for (size_t j=0;j<near_panel.num_members;j++){
-                e_field[leaf_panel.members[particlei]] += kernel(px, source_particles[near_panel.members[j]]) * weights[near_panel.members[j]];
-            }
-        }
-    }
+    int blocksize = 128;
+    int gridlen = (leaf_panel.num_members + blocksize - 1) / blocksize;
+    computepanelsum<<<gridlen, blocksize>>>(e_field, leaf_panel, tree_list, source_particles, weights);
     
+#if TESTFLAG 
    printf("e[%d] = %f\n", idx, e_field[idx]);
+#endif
 
 }
 
@@ -381,7 +399,7 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     errcode = cudaMemcpy(d_leaf_indicies, leaf_indicies, leaf_size*sizeof(int), cudaMemcpyHostToDevice);
     if(checkcudaerr(errcode) != 0){cout << "Failed copying leaf indicies to device" << endl;}
 
-    int blocksize = 1024;
+    int blocksize = 128;
     int gridlen = (source_size + blocksize - 1) / blocksize;
     init_modified_weights<<<gridlen,blocksize>>>(d_tree_list, d_particles, d_weights, source_size, tree_size);
 
@@ -404,10 +422,19 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     cout << endl;
 #endif
 
+    free_tree_list(root.left_child);
+    free_tree_list(root.right_child);
+
     gridlen = (leaf_size + blocksize - 1) / blocksize;
     computesum<<<gridlen,blocksize>>>(d_efield, d_tree_list, d_leaf_indicies, d_particles, d_weights, leaf_size);
 
     errcode = cudaMemcpy(e_field, d_efield, target_size*sizeof(double), cudaMemcpyDeviceToHost);
     if(checkcudaerr(errcode) != 0){cout << "Failed to copy e_field to host" << endl;}
+
+    cudaFree(d_tree_list);
+    cudaFree(d_particles);
+    cudaFree(d_weights);
+    cudaFree(d_leaf_indicies);
+    cudaFree(d_efield);
 
 }

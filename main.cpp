@@ -41,7 +41,7 @@ int main(int argc, char** argv) {
         // Maybe need to handle nondistinct particles
         locs[k] = std::fmod( 0.5 * cos( 2*pi/L * k * dx ) + k*dx, L );
         while(locs[k] < 0){ locs[k] += L;  }
-        cout << k << "\t" << locs[k] << endl;
+        //cout << k << "\t" << locs[k] << endl;
        // locs[k] = ((int)k)*dx;
     }
     
@@ -59,7 +59,7 @@ int main(int argc, char** argv) {
     auto duration = duration_cast<milliseconds>(end - start);
     cout << "BLTC time (ms): " << duration.count() << endl;
     cout << "Finished BLTC, result is" << endl;
-    for(size_t k=0;k<N;k++){
+    for(size_t k=0;k<10;k++){
         cout << "e[" << k << "] = " << setprecision(16) << e_field[k] << endl;
     }
 
@@ -73,7 +73,7 @@ int main(int argc, char** argv) {
     duration = duration_cast<milliseconds>(end - start);
     cout << "Direct sum parallel time (ms): " << duration.count() << endl;
     cout << "Finished direct sum, result is" << endl;
-    for(size_t k=0;k<N;k++){
+    for(size_t k=0;k<10;k++){
         cout << "e[" << k << "] = " << setprecision(16) << direct_e_par[k] << endl;
     }
 
@@ -84,14 +84,19 @@ int main(int argc, char** argv) {
     duration = duration_cast<milliseconds>(end - start);
     cout << "Direct sum serial time (ms): " << duration.count() << endl;
     cout << "Finished direct sum serial, result is" << endl;
-    for(size_t k=0;k<N;k++){
+    for(size_t k=0;k<10;k++){
         cout << "e[" << k << "] = " << setprecision(16) << direct_e[k] << endl;
     }
 
     cout << endl << "Error: ";
     double err = 0.0;
+    double perr = 0.0;
     double direct_e_norm = 0.0;
+    double maxerr = 0.0;
+    size_t maxk = 0;
     for(size_t k=0;k<N;k++){
+        perr = (e_field[k] - direct_e[k]) * (e_field[k] - direct_e[k]);
+        if(perr > maxerr){maxerr = perr; maxk = k;}
         err += (e_field[k] - direct_e[k]) * (e_field[k] - direct_e[k]);
         direct_e_norm += direct_e[k] * direct_e[k];
     }
@@ -99,4 +104,5 @@ int main(int argc, char** argv) {
     double rel_err = sqrt(err/direct_e_norm);
 
     cout << setprecision(16) << rel_err << endl;
+    cout << "Max error was " << setprecision(16) << maxerr << " at particle " << maxk << endl;
 }
