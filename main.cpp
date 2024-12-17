@@ -30,17 +30,19 @@ void treeprint(panel *p){
 
 int main(int argc, char** argv) {
     const double L = 1.0;
-    const size_t N = 10; 
+    const size_t N = 128*128; 
     const double dx = L/N;
     
 
     // initialzied root using new 
-    panel root;
     double locs[N];
+    double source_locs[N];
     for (size_t k = 0; k < N; k++){
         // Maybe need to handle nondistinct particles
         locs[k] = std::fmod( 0.5 * cos( 2*pi/L * k * dx ) + k*dx, L );
+        source_locs[k] = std::fmod( 0.5 * cos( 2*pi/L * k * dx ) + k*dx, L );
         while(locs[k] < 0){ locs[k] += L;  }
+        while(source_locs[k] < 0){ source_locs[k] += L;  }
         //cout << k << "\t" << locs[k] << endl;
        // locs[k] = ((int)k)*dx;
     }
@@ -54,27 +56,39 @@ int main(int argc, char** argv) {
 
     cout << "Calling BLTC" << endl;
     auto start = high_resolution_clock::now();
-    BLTC(e_field, locs, locs, weights, N, N, N);
+    BLTC(e_field, source_locs, locs, weights, N, N, N);
     auto end = high_resolution_clock::now();
     auto duration = duration_cast<milliseconds>(end - start);
     cout << "BLTC time (ms): " << duration.count() << endl;
     cout << "Finished BLTC, result is" << endl;
-    for(size_t k=0;k<10;k++){
+    for(size_t k=0;k<20;k++){
         cout << "e[" << k << "] = " << setprecision(16) << e_field[k] << endl;
     }
 
     double direct_e[N];
     double direct_e_par[N];
+    double direct_e_par_dyn[N];
 
-    cout << endl << "Calling direct sum" << endl;
+    cout << endl << "Calling direct sum parallel" << endl;
     start = high_resolution_clock::now();
-    directsum(direct_e_par, locs, locs, weights, N, N);
+    directsum(direct_e_par, locs, locs, weights, N, N, false);
     end = high_resolution_clock::now();
     duration = duration_cast<milliseconds>(end - start);
     cout << "Direct sum parallel time (ms): " << duration.count() << endl;
-    cout << "Finished direct sum, result is" << endl;
+    cout << "Finished direct sum parallel, result is" << endl;
     for(size_t k=0;k<10;k++){
         cout << "e[" << k << "] = " << setprecision(16) << direct_e_par[k] << endl;
+    }
+
+    cout << endl << "Calling direct sum parallel (dynamic)" << endl;
+    start = high_resolution_clock::now();
+    directsum(direct_e_par_dyn, locs, locs, weights, N, N, true);
+    end = high_resolution_clock::now();
+    duration = duration_cast<milliseconds>(end - start);
+    cout << "Direct sum dynamic parallel time (ms): " << duration.count() << endl;
+    cout << "Finished direct sum dynamic parallel, result is" << endl;
+    for(size_t k=0;k<10;k++){
+        cout << "e[" << k << "] = " << setprecision(16) << direct_e_par_dyn[k] << endl;
     }
 
     cout << endl << "Calling direct sum serial" << endl;
@@ -84,7 +98,7 @@ int main(int argc, char** argv) {
     duration = duration_cast<milliseconds>(end - start);
     cout << "Direct sum serial time (ms): " << duration.count() << endl;
     cout << "Finished direct sum serial, result is" << endl;
-    for(size_t k=0;k<10;k++){
+    for(size_t k=0;k<20;k++){
         cout << "e[" << k << "] = " << setprecision(16) << direct_e[k] << endl;
     }
 

@@ -1,10 +1,9 @@
 #include "BLTC.hpp"
-//#include "kernel.cuh"
+#include "quicksort.h"
 #include<cmath>
 
 #include <iostream>
 #include <iomanip>
-#include<cstring> // for memset
 using std::cout, std::endl;
 using namespace std;
 
@@ -26,6 +25,7 @@ using namespace std;
  */
 void split_panel(panel *p, double* source_particles, int *tree_size, int *leaf_size){
 
+
     panel *left_child = new panel();
     panel *right_child = new panel();
 
@@ -38,11 +38,6 @@ void split_panel(panel *p, double* source_particles, int *tree_size, int *leaf_s
     for (int k=0;k<PP;k++){
         left_child->s[k] = 0.5 * ( left_child->xinterval[0] + left_child->xinterval[1] + std::cos(k*pi/PP)*( left_child->xinterval[1] - left_child->xinterval[0]  ));
     }
-    for(int k=0;k<Nmax;k++){
-        left_child->near_ids[k] = -1;
-        left_child->far_ids[k] = -1;
-    }
-
 
     right_child->xinterval[0] = p->xc;
     right_child->xinterval[1] = p->xinterval[1];
@@ -53,30 +48,26 @@ void split_panel(panel *p, double* source_particles, int *tree_size, int *leaf_s
     for (int k=0;k<PP;k++){
         right_child->s[k] = 0.5 * ( right_child->xinterval[0] + right_child->xinterval[1] + std::cos(k*pi/PP)*( right_child->xinterval[1] - right_child->xinterval[0]  ));
     }
-    for(int k=0;k<Nmax;k++){
-        right_child->near_ids[k] = -1;
-        right_child->far_ids[k] = -1;
-    }
 
 #if TESTFLAG
-    cout << "Members are ";
-    for (size_t k=0;k<p->num_members;k++){
-        cout << p->members[k] << "\t";
-    }
+    cout << "Members are " << p->members[0] << " through " << p->members[1] << endl;
     cout << endl;
     cout << "Splitting particles with " << p->num_members << " Members" << endl;
 #endif
-    for (size_t k=0;k<p->num_members;k++){
-        if (source_particles[p->members[k]] < p->xc){
-            left_child->members[left_child->num_members] = p->members[k];
-            left_child->num_members += 1;
-        }
-        else{
-            right_child->members[right_child->num_members] = p->members[k];
-            right_child->num_members += 1;
+
+    left_child->members[0] = p->members[0];
+    right_child->members[1] = p->members[1];
+    for(size_t k=p->members[0];p->members[1];k++){
+        if(source_particles[k] >= p->xc){
+            left_child->members[1] = k-1;
+            right_child->members[0] = k;
+            break;
         }
     }
+    left_child->num_members = left_child->members[1] - left_child->members[0] + 1;
+    right_child->num_members = right_child->members[1] - right_child->members[0] + 1;
 
+    
 #if TESTFLAG
     cout << " Split panels sucessfully, found " << left_child->num_members << " left particles and " << right_child->num_members << " right particles" << endl;
 #endif
@@ -108,7 +99,7 @@ void free_tree_list(panel *panel){
     free(panel);
 }
 
-__global__ void init_modified_weights(panel* d_tree_list, double *d_particles, double *d_weights, int source_size, int tree_size){
+__global__ void init_modified_weights(panel *d_tree_list, double *d_particles, double *d_weights, int source_size, int tree_size){
     int idx = blockIdx.x*blockDim.x + threadIdx.x;
 
     if (idx >= tree_size){return;}
@@ -136,8 +127,8 @@ __global__ void init_modified_weights(panel* d_tree_list, double *d_particles, d
     }
 
     // set up modified weights 
-    for (int k = 0; k < p->num_members; k++) {
-        double y = d_particles[p->members[k]]; // particles in cluster
+    for (int k = p->members[0]; k <= p->members[1]; k++) {
+        double y = d_particles[k]; // particles in cluster
         int flag = -1;
         double sum = 0.0;
         for (int i = 0; i < PP; i++) {
@@ -160,17 +151,15 @@ __global__ void init_modified_weights(panel* d_tree_list, double *d_particles, d
 
         double D = 1.0 / sum;
         for (int i = 0; i < PP; i++) {
-            p->modified_weights[i] += a1[i] * D * d_weights[p->members[i]];
+            p->modified_weights[i] += a1[i] * D * d_weights[k];
         }
     }
-
-
 }
 
-void init_interaction_lists(panel* leaf, panel* source_panel, int *near_index, int *far_index, double period){
+void init_interaction_lists(panel* leaf, panel* source_panel, int *near_ids, int *far_ids, int *near_index, int *far_index, int leaf_id, int leaf_size, double period){
     // Check if source panel is a leaf
-    if (!source_panel->left_child){
-        leaf->near_ids[*near_index] = source_panel->id;
+    if (!source_panel->left_child && !source_panel->right_child){
+        near_ids[leaf_id*leaf_size + *near_index] = source_panel->id;
         *near_index += 1;
         leaf->near_size += 1;
     }
@@ -178,19 +167,21 @@ void init_interaction_lists(panel* leaf, panel* source_panel, int *near_index, i
         double leaf_radius = leaf->xc - leaf->xinterval[0];
         double source_radius = source_panel->xc - source_panel->xinterval[0];
         double distance = std::fabs(leaf->xc - source_panel->xc);
-        distance = std::fmin(distance, period-distance);
+        ///////////////////////////// THIS LINE FOR PERIODIC CONDITIONS //////////////////////////
+//        distance = std::fmin(distance, period-distance);
+//        /////////////////////////////////////////////////////////////////////////////////////
 #if TESTFLAG
         cout << "Leaf Id, Source ID, Leaf radius, source radius, distance, ratio: " << endl;
         cout << leaf->id << "\t" << source_panel->id << "\t" << leaf_radius << "\t" << source_radius << "\t" << distance << "\t" << (leaf_radius + source_radius) / distance << endl;
 #endif
         if ( (leaf_radius + source_radius) / distance < MAC){
-            leaf->far_ids[*far_index] = source_panel->id;
+            far_ids[leaf_id*leaf_size + *far_index] = source_panel->id;
             *far_index += 1;
             leaf->far_size += 1;
         }
         else{
-            init_interaction_lists(leaf, source_panel->left_child, near_index, far_index, period);
-            init_interaction_lists(leaf, source_panel->right_child, near_index, far_index, period);
+            init_interaction_lists(leaf, source_panel->left_child, near_ids, far_ids, near_index, far_index, leaf_id, leaf_size, period);
+            init_interaction_lists(leaf, source_panel->right_child, near_ids, far_ids, near_index, far_index, leaf_id, leaf_size, period);
         }
     }
 }
@@ -218,51 +209,49 @@ void init_tree_list(panel *p, panel *tree_list, int *current_id, int *leaf_indic
 
 // This will eventually read L from the interface class
 __device__ double kernel(double x, double y){
-    const double eps = 1e-3;
+/*    const double eps = 1e-8;
     double z = x - y;
     z = z - round(z);
-    return 0.5 * z * sqrt(1 + 4 * eps * eps) / sqrt( z*z + eps*eps  ) - z;
-    //return sqrt(x*y);
-
+    return 0.5 * z * sqrt(1.0 + 4.0 * eps * eps) * rsqrt( z*z + eps*eps  ) - z;
+    */
+    return x*y;
 }
 
-__global__ void computepanelsum(double *e_field, panel leaf_panel, panel *tree_list, double *source_particles, double *weights){
+__global__ void computepanelsum(double *e_field, panel *leaf_panel, panel *tree_list, double *target_particles, double *source_particles, double *weights, int *d_near_list, int *d_far_list, int leaf_id, int leaf_size){
     int idx = blockIdx.x*blockDim.x + threadIdx.x;
 
-    if(idx >= leaf_panel.num_members){return;}
+    if(idx >= leaf_panel->num_members){return;}
 
-    int member_idx = leaf_panel.members[idx];
+    int member_idx = leaf_panel->members[0]+idx;
     double px = source_particles[member_idx];
+    double local_e = 0.0;
 
-    for(size_t k=0;k<leaf_panel.far_size;k++){
-            panel far_panel = tree_list[leaf_panel.far_ids[k]];
+    for(size_t k=0;k<leaf_panel->far_size;k++){
+            panel far_panel = tree_list[d_far_list[leaf_size * leaf_id + k]];
             for (size_t j=0;j<PP;j++){
-                e_field[member_idx] += kernel(px, far_panel.s[j]) * far_panel.modified_weights[j];
+                local_e += kernel(px, far_panel.s[j]) * far_panel.modified_weights[j];
             }
        } 
 
-    for(size_t k=0;k<leaf_panel.near_size;k++){
-        panel near_panel = tree_list[leaf_panel.near_ids[k]];
-        for (size_t j=0;j<near_panel.num_members;j++){
-            e_field[member_idx] += kernel(px, source_particles[near_panel.members[j]]) * weights[near_panel.members[j]];
+    for(size_t k=0;k<leaf_panel->near_size;k++){
+        panel near_panel = tree_list[d_near_list[leaf_size * leaf_id + k]];
+        for (size_t j=near_panel.members[0];j<=near_panel.members[1];j++){
+            local_e += kernel(px, source_particles[j]) * weights[j];
         }
     }
+    e_field[member_idx] = local_e;
 }
 
-__global__ void computesum(double *e_field, panel *tree_list, int *leaf_indicies, double *source_particles, double *weights, size_t leaf_size){
+__global__ void computesum(double *e_field, panel *tree_list, int *leaf_indicies, double *target_particles, double *source_particles, double *weights, int *d_near_list, int *d_far_list, int leaf_size){
     int idx = blockIdx.x*blockDim.x + threadIdx.x;
 
     if(idx >= leaf_size) {return;}
 
-    panel leaf_panel = tree_list[leaf_indicies[idx]];
+    panel *leaf_panel = tree_list + leaf_indicies[idx];
 
     int blocksize = 128;
-    int gridlen = (leaf_panel.num_members + blocksize - 1) / blocksize;
-    computepanelsum<<<gridlen, blocksize>>>(e_field, leaf_panel, tree_list, source_particles, weights);
-    
-#if TESTFLAG 
-   printf("e[%d] = %f\n", idx, e_field[idx]);
-#endif
+    int gridlen = (leaf_panel->num_members + blocksize - 1) / blocksize;
+    computepanelsum<<<gridlen, blocksize>>>(e_field, leaf_panel, tree_list, target_particles, source_particles, weights, d_near_list, d_far_list, idx, leaf_size);
 
 }
 
@@ -277,20 +266,41 @@ int checkcudaerr(cudaError_t err){
 }
 
 // TODO
-// Set xinterval and xc of root automatically
 // Deal with more particles
 // Dynamic parallelism
+// Multi-GPU
 
 void BLTC(double *e_field, double *source_particles, double *target_particles, double *weights, 
         size_t e_field_size, size_t source_size, size_t target_size){
 
+#if TESTFLAG
+    cout << "Input particles:" << endl;
+    for(size_t k=0;k<source_size;k++){
+        cout << "x[" << k << "] = " << source_particles[k] << endl;
+    }
+#endif
+    // TODO Need to sort particles and also re-sort the corresponding weights
+    size_t source_indicies[source_size];
+    for(size_t k=0;k<source_size;k++){
+        source_indicies[k] = k;
+    }
+    quicksort(source_particles, (int)source_size, source_indicies);
+#if TESTFLAG
+    cout << endl << "Sorted particles:" << endl << endl;;
+    for(size_t k=0;k<source_size;k++){
+        cout << "x[" << k << "] = " << source_particles[k] << endl;
+    }
+#endif
+
     const double L = 1.0;
+
 
     panel root;
     double xmin = source_particles[0];
     double xmax = source_particles[0];
+    root.members[0] = 0;
+    root.members[1] = source_size-1;
     for (size_t k=0; k<source_size; k++){
-        root.members[k] = k;
         if(source_particles[k] < xmin){ xmin = source_particles[k]; }
         if(source_particles[k] > xmax){ xmax = source_particles[k]; }
     }
@@ -305,13 +315,10 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     for (int k=0;k<PP;k++){
         root.s[k] = 0.5 * ( root.xinterval[0] + root.xinterval[1] + std::cos(k*pi/PP)*( root.xinterval[1] - root.xinterval[0]  ));
     }
-    for(int k=0;k<Nmax;k++){
-        root.near_ids[k] = -1;
-        root.far_ids[k] = -1;
-    }
-
+    
     int tree_size = 1;
     int leaf_size = 0;
+
 
     split_panel(&root, source_particles, &tree_size, &leaf_size);
 
@@ -321,7 +328,9 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     int id = 0;
     int leaf_id = 0;
 
+
     init_tree_list(&root, tree_list, &id, leaf_indicies, &leaf_id);
+
 #if TESTFLAG
     cout << endl;
     cout << "Tree list is" << endl;
@@ -336,27 +345,32 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     cout << endl;
 #endif
 
+    int near_interactions[leaf_size*leaf_size];
+    int far_interactions[leaf_size*leaf_size];
+    for (size_t k=0;k<leaf_size*leaf_size;k++){
+        near_interactions[k] = -1;
+        far_interactions[k] = -1;
+    }
+
     for(int k=0;k<leaf_size;k++){
         int near_index = 0;
         int far_index = 0;
-        init_interaction_lists(tree_list+leaf_indicies[k], &root, &near_index, &far_index, L); 
+        init_interaction_lists(tree_list+leaf_indicies[k], &root, near_interactions, far_interactions, &near_index, &far_index, k, leaf_size, L); 
     }
 
 #if TESTFLAG
     cout << endl;
     for(int k=0;k<leaf_size;k++){
         cout << "Leaf " << k << " has ID " << leaf_indicies[k] << " and near Ids" << endl;
-        int j=0;
-        while ( tree_list[leaf_indicies[k]].near_ids[j] != -1){
-            cout << tree_list[leaf_indicies[k]].near_ids[j] << "\t";
-            j++ ;
+        for(int i=0;i<leaf_size;i++){
+            if (near_interactions[k*leaf_size + i] == -1){break;}
+            cout << near_interactions[k*leaf_size + i] << "\t";
         }
         cout << endl;
         cout << "and far Ids" << endl;
-        j = 0;
-        while ( tree_list[leaf_indicies[k]].far_ids[j] != -1){
-            cout << tree_list[leaf_indicies[k]].far_ids[j] << "\t";
-            j++;
+        for(int i=0;i<leaf_size;i++){
+            if (far_interactions[k*leaf_size + i] == -1){break;}
+            cout << far_interactions[k*leaf_size + i] << "\t";
         }
         cout << endl;
     }
@@ -366,8 +380,11 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     // Initilize device vars
     panel *d_tree_list;
     double *d_particles;
+    double *d_targets;
     double *d_weights;
     double *d_efield;
+    int *d_near_list;
+    int *d_far_list;
     int *d_leaf_indicies;
 
     cudaError_t errcode;
@@ -378,11 +395,20 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     errcode = cudaMalloc(&d_particles, source_size*sizeof(double));
     if(checkcudaerr(errcode) !=0){cout << "Failed allocating source particles" << endl;}
 
+    errcode = cudaMalloc(&d_targets, target_size*sizeof(double));
+    if(checkcudaerr(errcode) !=0){cout << "Failed allocating target particles" << endl;}
+
     errcode = cudaMalloc(&d_weights, source_size*sizeof(double));
     if(checkcudaerr(errcode) != 0){cout << "Failed allocating source weights" << endl;}
 
     errcode = cudaMalloc(&d_efield, target_size*sizeof(double));
     if(checkcudaerr(errcode) != 0){cout << "Failed allocating e_field" << endl;}
+    
+    errcode = cudaMalloc(&d_near_list, leaf_size*leaf_size*sizeof(int));
+    if(checkcudaerr(errcode) != 0){cout << "Failed allocating near interaction list" << endl;}
+    
+    errcode = cudaMalloc(&d_far_list, leaf_size*leaf_size*sizeof(int));
+    if(checkcudaerr(errcode) != 0){cout << "Failed allocating far interaction list" << endl;}
 
     errcode = cudaMalloc(&d_leaf_indicies, leaf_size*sizeof(int));
     if(checkcudaerr(errcode) != 0){cout << "Failed allocating leaf indicies" << endl;}
@@ -392,9 +418,18 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
  
     errcode = cudaMemcpy(d_particles, source_particles, source_size*sizeof(double), cudaMemcpyHostToDevice);
     if(checkcudaerr(errcode) != 0){cout << "Failed copying source particles to device" << endl;}
- 
+
+    errcode = cudaMemcpy(d_targets, target_particles, target_size*sizeof(double), cudaMemcpyHostToDevice);
+    if(checkcudaerr(errcode) != 0){cout << "Failed copying target particles to device" << endl;}
+
     errcode = cudaMemcpy(d_weights, weights, source_size*sizeof(double), cudaMemcpyHostToDevice);
     if(checkcudaerr(errcode) != 0){cout << "Failed copying source weights to device" << endl;}
+
+    errcode = cudaMemcpy(d_near_list, near_interactions, leaf_size*leaf_size*sizeof(int), cudaMemcpyHostToDevice);
+    if(checkcudaerr(errcode) != 0){cout << "Failed copying near interactions to device" << endl;}
+
+    errcode = cudaMemcpy(d_far_list, far_interactions, leaf_size*leaf_size*sizeof(int), cudaMemcpyHostToDevice);
+    if(checkcudaerr(errcode) != 0){cout << "Failed copying far interactions to device" << endl;}
 
     errcode = cudaMemcpy(d_leaf_indicies, leaf_indicies, leaf_size*sizeof(int), cudaMemcpyHostToDevice);
     if(checkcudaerr(errcode) != 0){cout << "Failed copying leaf indicies to device" << endl;}
@@ -426,10 +461,15 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     free_tree_list(root.right_child);
 
     gridlen = (leaf_size + blocksize - 1) / blocksize;
-    computesum<<<gridlen,blocksize>>>(d_efield, d_tree_list, d_leaf_indicies, d_particles, d_weights, leaf_size);
+    computesum<<<gridlen,blocksize>>>(d_efield, d_tree_list, d_leaf_indicies, d_targets, d_particles, d_weights, d_near_list, d_far_list, leaf_size);
 
-    errcode = cudaMemcpy(e_field, d_efield, target_size*sizeof(double), cudaMemcpyDeviceToHost);
+    double ordered_e_field[source_size];
+    errcode = cudaMemcpy(ordered_e_field, d_efield, target_size*sizeof(double), cudaMemcpyDeviceToHost);
     if(checkcudaerr(errcode) != 0){cout << "Failed to copy e_field to host" << endl;}
+
+    for(size_t k=0;k<source_size;k++){
+        e_field[source_indicies[k]] = ordered_e_field[k];
+    }
 
     cudaFree(d_tree_list);
     cudaFree(d_particles);

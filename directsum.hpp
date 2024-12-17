@@ -4,7 +4,7 @@
 //        size_t source_size, size_t target_size);
 
 void directsum(double *e_field, double *source_particles, double *target_particles, double *weights,
-        size_t source_size, size_t target_size);
+        size_t source_size, size_t target_size, bool dynamic);
 
 void directsum_serial(double *e_field, double *source_particles, double *target_particles, double *weights,
         size_t source_size, size_t target_size);

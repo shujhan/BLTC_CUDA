@@ -1,47 +1,62 @@
-//#include "kernel.cuh"
+#include "quicksort.h"
 #include<iostream>
 #include<cmath>
 using std::cout;
 using std::endl;
 
-#define TIMEFLAG 0 // For extra timing output
-
-#if TIMEFLAG
-#include<ctime>
-#endif
-
-/*
-__device__ void kernel(double *res, double x, double y){
-//    double const eps = 1e-3;
-//    double z = x - y;
-//    res[0] = 0.5 * z * sqrt(1 + 4 * eps * eps) / sqrt( z*z + eps*eps  ) - z;
-    res[0] = sqrt(y);
-}
-
-double kernel_serial(double x, double y){
-//    double const eps = 1e-3;
-//    double z = x - y;
-//    return 0.5 * z * std::sqrt(1 + 4 * eps * eps) / std::sqrt( z*z + eps*eps  ) - z;
-    return sqrt(y);
-}
-*/
 
 __device__ double kernelp(double x, double y){
-    double const eps = 1e-3;
+/*    double const eps = 1e-8;
     double z = x - y;
     z = z - round(z);
     return 0.5 * z * sqrt(1 + 4 * eps * eps) / sqrt( z*z + eps*eps  ) - z;
-   // return sqrt(x*y);
+    */
+    return x*y;
 }
 
 double kernels(double x, double y){
-    double const eps = 1e-3;
+    /*
+    double const eps = 1e-8;
     double z = x - y;
     z = z - round(z);
     return 0.5 * z * sqrt(1 + 4 * eps * eps) / sqrt( z*z + eps*eps  ) - z;
-    //return sqrt(x*y);
+    */
+    return x*y;
 }
 
+//////////////////////////////
+// Dynamic parallel version //
+//////////////////////////////
+// TODO Replace the atomicAdd with a reduce sum over an array, should be a bit faster (less serialization)
+__global__ void direct_e_particle(double *d_efield_p, double *d_particles, double target_loc, double *d_weights, size_t source_size){
+    int idx = blockIdx.x*blockDim.x + threadIdx.x;
+
+    if (idx >= source_size){return;}
+
+    double local_eval = kernelp(target_loc, d_particles[idx]) * d_weights[idx];
+
+    atomicAdd(d_efield_p, local_eval);
+}
+
+__global__ void direct_e_sum_dynamic(double *d_efield, double *d_particles, double *d_target, double *d_weights,
+        size_t source_size, size_t target_size){
+
+    int idx = blockIdx.x*blockDim.x + threadIdx.x;
+
+   if (idx >= target_size){return;}
+   // Initilize to zero
+   d_efield[idx] = 0.0;
+
+   double target_loc = d_target[idx];
+
+   int blocksize = 1024;
+   int gridlen = (source_size + blocksize - 1) / blocksize;
+   direct_e_particle<<<gridlen,blocksize>>>(d_efield + idx, d_particles, target_loc, d_weights, source_size);
+}
+
+//////////////////////////////////
+// Non-dynamic parallel version //
+//////////////////////////////////
 __global__ void direct_e_sum(double *d_efield, double *d_particles, double *d_target, double *d_weights,
         size_t source_size, size_t target_size){
 
@@ -50,10 +65,12 @@ __global__ void direct_e_sum(double *d_efield, double *d_particles, double *d_ta
    if (idx >= target_size){return;}
 
    double target_loc = d_target[idx];
+   double local_e = 0.0;
 
    for (size_t k=0; k<source_size;k++){
-       d_efield[idx] += kernelp(target_loc, d_particles[k]) * d_weights[k];
+       local_e += kernelp(target_loc, d_particles[k]) * d_weights[k];
    }
+   d_efield[idx] = local_e;
 }
 
 void directsum_serial(double *e_field, double *source_particles, double *target_particles, double *weights,
@@ -63,9 +80,6 @@ void directsum_serial(double *e_field, double *source_particles, double *target_
         e_field[k] = 0.0;
     }
 
-#if TIMEFLAG
-    const std::clock_t start = std::clock();
-#endif
 
     for (size_t k=0;k<target_size;k++){
         for (size_t j=0;j<source_size;j++){
@@ -73,16 +87,12 @@ void directsum_serial(double *e_field, double *source_particles, double *target_
         }
     }
 
-#if TIMEFLAG
-    const std::clock_t end = std::clock();
-
-    cout << "Direct sum serial time (ms): " << 1000 * double(end-start)/CLOCKS_PER_SEC << endl;
-#endif
 
 }
 
 void directsum(double *e_field, double *source_particles, double *target_particles, double *weights,
-        size_t source_size, size_t target_size){
+        size_t source_size, size_t target_size, bool dynamic){
+
 
     // Initilize output array to zero
     for(size_t k=0;k<target_size;k++){
@@ -133,32 +143,18 @@ void directsum(double *e_field, double *source_particles, double *target_particl
     int gridlen = target_size / blocksize;
     if (target_size % blocksize != 0) {gridlen++;}
 
-#if TIMEFLAG
-    float elapsed_time = 0;
-    cudaEvent_t start,stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-
-    cudaEventRecord(start);
-#endif
 
     // Call the kernel
-    direct_e_sum<<<gridlen,blocksize>>>(d_efield, d_particles, d_target, d_weights, source_size, target_size);
+    if(dynamic)
+        direct_e_sum_dynamic<<<gridlen,blocksize>>>(d_efield, d_particles, d_target, d_weights, source_size, target_size);
+    else{
+        direct_e_sum<<<gridlen,blocksize>>>(d_efield, d_particles, d_target, d_weights, source_size, target_size);
+    }
     errcode = cudaDeviceSynchronize();
     if (errcode != cudaSuccess){
         cout << "Kernel launch failed with code " << errcode << " " << cudaGetErrorString(errcode) << endl;
     }
 
-#if TIMEFLAG
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&elapsed_time, start, stop);
-
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
-
-    cout << "Direct summation parallel time (ms): " << elapsed_time << endl;
-#endif
 
     errcode = cudaMemcpy(e_field, d_efield, target_size*sizeof(double), cudaMemcpyDeviceToHost);
     if (errcode != cudaSuccess){
