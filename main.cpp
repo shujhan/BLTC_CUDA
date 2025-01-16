@@ -7,6 +7,7 @@
 #include <cassert>
 #include <fstream>
 #include<chrono>
+#include<stdlib.h>
 
 using namespace std;
 using namespace std::chrono;
@@ -30,8 +31,12 @@ void treeprint(panel *p){
 
 int main(int argc, char** argv) {
     const double L = 1.0;
-    const size_t N = 128*128; 
+    const size_t N = argc==2 ? atoi(argv[1]) : 128*128;
     const double dx = L/N;
+
+    cout << "N = " << N << endl;
+    cout << "Interp degree = " << P << endl;
+    cout << "MAC = " << MAC << endl;
     
 
     // initialzied root using new 
@@ -60,10 +65,12 @@ int main(int argc, char** argv) {
     auto end = high_resolution_clock::now();
     auto duration = duration_cast<milliseconds>(end - start);
     cout << "BLTC time (ms): " << duration.count() << endl;
+//#if TESTFLAG
     cout << "Finished BLTC, result is" << endl;
     for(size_t k=0;k<20;k++){
         cout << "e[" << k << "] = " << setprecision(16) << e_field[k] << endl;
     }
+//#endif
 
     double direct_e[N];
     double direct_e_par[N];
@@ -74,12 +81,36 @@ int main(int argc, char** argv) {
     directsum(direct_e_par, locs, locs, weights, N, N, false);
     end = high_resolution_clock::now();
     duration = duration_cast<milliseconds>(end - start);
-    cout << "Direct sum parallel time (ms): " << duration.count() << endl;
+    cout << "Direct sum parallel time (ms): " << setprecision(16) << duration.count() << endl;
+//#if TESTFLAG
     cout << "Finished direct sum parallel, result is" << endl;
     for(size_t k=0;k<10;k++){
         cout << "e[" << k << "] = " << setprecision(16) << direct_e_par[k] << endl;
     }
+//#endif
+    
+    cout << endl << "Error: ";
+    double err = 0.0;
+    double perr = 0.0;
+    double direct_e_norm = 0.0;
+    double maxerr = 0.0;
+    size_t maxk = 0;
+    for(size_t k=0;k<N;k++){
+        perr = (e_field[k] - direct_e_par[k]) * (e_field[k] - direct_e_par[k]);
+        if(perr > maxerr){maxerr = perr; maxk = k;}
+        err += (e_field[k] - direct_e_par[k]) * (e_field[k] - direct_e_par[k]);
+        direct_e_norm += direct_e_par[k] * direct_e_par[k];
+    }
 
+    double rel_err = sqrt(err/direct_e_norm);
+
+    cout << setprecision(16) << rel_err << endl;
+    cout << "Max error was " << setprecision(16) << maxerr << " at particle " << maxk << endl;
+    cout << "BLTC: e[" << maxk << "] = " << setprecision(16) << e_field[maxk] << endl;
+    cout << "Direct sum: e[" << maxk << "] = " << setprecision(16) << direct_e_par[maxk] << endl;
+
+
+/*
     cout << endl << "Calling direct sum parallel (dynamic)" << endl;
     start = high_resolution_clock::now();
     directsum(direct_e_par_dyn, locs, locs, weights, N, N, true);
@@ -90,33 +121,22 @@ int main(int argc, char** argv) {
     for(size_t k=0;k<10;k++){
         cout << "e[" << k << "] = " << setprecision(16) << direct_e_par_dyn[k] << endl;
     }
-
+*/
+    if (N <= 1000000){
     cout << endl << "Calling direct sum serial" << endl;
     start = high_resolution_clock::now();
     directsum_serial(direct_e, locs, locs, weights, N, N);
     end = high_resolution_clock::now();
     duration = duration_cast<milliseconds>(end - start);
-    cout << "Direct sum serial time (ms): " << duration.count() << endl;
+    cout << "Direct sum serial time (ms): " << setprecision(16) << duration.count() << endl;
+//#if TESTFLAG
     cout << "Finished direct sum serial, result is" << endl;
     for(size_t k=0;k<20;k++){
         cout << "e[" << k << "] = " << setprecision(16) << direct_e[k] << endl;
     }
-
-    cout << endl << "Error: ";
-    double err = 0.0;
-    double perr = 0.0;
-    double direct_e_norm = 0.0;
-    double maxerr = 0.0;
-    size_t maxk = 0;
-    for(size_t k=0;k<N;k++){
-        perr = (e_field[k] - direct_e[k]) * (e_field[k] - direct_e[k]);
-        if(perr > maxerr){maxerr = perr; maxk = k;}
-        err += (e_field[k] - direct_e[k]) * (e_field[k] - direct_e[k]);
-        direct_e_norm += direct_e[k] * direct_e[k];
+//#endif
     }
 
-    double rel_err = sqrt(err/direct_e_norm);
-
-    cout << setprecision(16) << rel_err << endl;
-    cout << "Max error was " << setprecision(16) << maxerr << " at particle " << maxk << endl;
+    
+        
 }

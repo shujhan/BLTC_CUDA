@@ -145,8 +145,10 @@ void directsum(double *e_field, double *source_particles, double *target_particl
 
 
     // Call the kernel
-    if(dynamic)
+    if(dynamic){
+	cudaDeviceSetLimit(cudaLimitDevRuntimePendingLaunchCount, 32768);
         direct_e_sum_dynamic<<<gridlen,blocksize>>>(d_efield, d_particles, d_target, d_weights, source_size, target_size);
+    }
     else{
         direct_e_sum<<<gridlen,blocksize>>>(d_efield, d_particles, d_target, d_weights, source_size, target_size);
     }

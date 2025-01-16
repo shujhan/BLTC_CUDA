@@ -4,10 +4,22 @@
 
 #include <iostream>
 #include <iomanip>
-using std::cout, std::endl;
+#include<assert.h>
+using std::cout; 
+using std::endl;
 using namespace std;
 
 #define TESTFLAG 0 
+
+#define cdpErrchk(ans) { cdpAssert((ans), __FILE__, __LINE__); }
+__device__ void cdpAssert(cudaError_t code, const char *file, int line, bool abort=true)
+{
+    if (code != cudaSuccess)
+    {
+        printf("GPU kernel assert: %s %s %d\n", cudaGetErrorString(code), file, line);
+	if (abort) assert (0);
+    }
+}
 
 /* split panel
  *
@@ -266,9 +278,9 @@ int checkcudaerr(cudaError_t err){
 }
 
 // TODO
-// Deal with more particles
-// Dynamic parallelism
 // Multi-GPU
+// non-unity weights (just need to re-order properly)
+// target particles differing from source particles (probably just need to swap source to target in a few places)
 
 void BLTC(double *e_field, double *source_particles, double *target_particles, double *weights, 
         size_t e_field_size, size_t source_size, size_t target_size){
@@ -459,6 +471,9 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
 
     free_tree_list(root.left_child);
     free_tree_list(root.right_child);
+
+    //Should set this dynamically eventually
+    cudaDeviceSetLimit(cudaLimitDevRuntimePendingLaunchCount, 16384);
 
     gridlen = (leaf_size + blocksize - 1) / blocksize;
     computesum<<<gridlen,blocksize>>>(d_efield, d_tree_list, d_leaf_indicies, d_targets, d_particles, d_weights, d_near_list, d_far_list, leaf_size);
