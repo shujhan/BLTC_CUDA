@@ -4,24 +4,25 @@
 using std::cout;
 using std::endl;
 
+#define TESTFLAG 1 
 
 __device__ double kernelp(double x, double y){
-/*    double const eps = 1e-8;
+    double const eps = 1e-1;
     double z = x - y;
     z = z - round(z);
-    return 0.5 * z * sqrt(1 + 4 * eps * eps) / sqrt( z*z + eps*eps  ) - z;
-    */
-    return x*y;
+    return 0.5 * z * sqrt(1 + 4 * eps * eps) * rsqrt( z*z + eps*eps  ) - z;
+    
+//    return x*y;
 }
 
 double kernels(double x, double y){
-    /*
-    double const eps = 1e-8;
+    
+    double const eps = 1e-1;
     double z = x - y;
     z = z - round(z);
-    return 0.5 * z * sqrt(1 + 4 * eps * eps) / sqrt( z*z + eps*eps  ) - z;
-    */
-    return x*y;
+    return 0.5 * z * sqrt(1 + 4 * eps * eps) * rsqrt( z*z + eps*eps  ) - z;
+    
+//    return x*y;
 }
 
 //////////////////////////////
@@ -162,6 +163,13 @@ void directsum(double *e_field, double *source_particles, double *target_particl
     if (errcode != cudaSuccess){
         cout << "Failed to transfer calculated e_field to host with code " << errcode << " " << cudaGetErrorString(errcode) << endl;
     }
+
+#if TESTFLAG
+    for (size_t k=0;k<source_size;k++){
+        cout << "e_direct[" << k << "] = " << e_field[k] << endl;
+    }
+#endif
+
 
     cudaFree(d_efield);
     cudaFree(d_target);

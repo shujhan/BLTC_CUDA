@@ -44,8 +44,8 @@ int main(int argc, char** argv) {
     double source_locs[N];
     for (size_t k = 0; k < N; k++){
         // Maybe need to handle nondistinct particles
-        locs[k] = std::fmod( 0.5 * cos( 2*pi/L * k * dx ) + k*dx, L );
-        source_locs[k] = std::fmod( 0.5 * cos( 2*pi/L * k * dx ) + k*dx, L );
+        locs[k] = std::fmod( 0.5 * cos( 2*pi/L * (k+1) * dx ) + (k+1)*dx, L );
+        source_locs[k] = std::fmod( 0.5 * cos( 2*pi/L * (k+1) * dx ) + (k+1)*dx, L );
         while(locs[k] < 0){ locs[k] += L;  }
         while(source_locs[k] < 0){ source_locs[k] += L;  }
         //cout << k << "\t" << locs[k] << endl;
@@ -67,7 +67,7 @@ int main(int argc, char** argv) {
     cout << "BLTC time (ms): " << duration.count() << endl;
 //#if TESTFLAG
     cout << "Finished BLTC, result is" << endl;
-    for(size_t k=0;k<20;k++){
+    for(size_t k=0;k<10;k++){
         cout << "e[" << k << "] = " << setprecision(16) << e_field[k] << endl;
     }
 //#endif
@@ -105,7 +105,7 @@ int main(int argc, char** argv) {
     double rel_err = sqrt(err/direct_e_norm);
 
     cout << setprecision(16) << rel_err << endl;
-    cout << "Max error was " << setprecision(16) << maxerr << " at particle " << maxk << endl;
+    cout << "Max error was " << setprecision(16) << sqrt(maxerr) << " at particle " << maxk << endl;
     cout << "BLTC: e[" << maxk << "] = " << setprecision(16) << e_field[maxk] << endl;
     cout << "Direct sum: e[" << maxk << "] = " << setprecision(16) << direct_e_par[maxk] << endl;
 
@@ -122,6 +122,7 @@ int main(int argc, char** argv) {
         cout << "e[" << k << "] = " << setprecision(16) << direct_e_par_dyn[k] << endl;
     }
 */
+/*
     if (N <= 1000000){
     cout << endl << "Calling direct sum serial" << endl;
     start = high_resolution_clock::now();
@@ -136,7 +137,7 @@ int main(int argc, char** argv) {
     }
 //#endif
     }
-
+*/
     
         
 }

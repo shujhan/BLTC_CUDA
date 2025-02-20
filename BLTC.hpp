@@ -7,7 +7,7 @@
 
 // Set numerical paramters
 static const size_t numpars_s = 10000;  // num particles
-static const size_t N0 = 3000; // Max points in a leaf
+static const size_t N0 = 1; // Max points in a leaf
 static const size_t Nmin = 1; // Min points in a leaf
 //static const max_level = 10;
 static const double pi = 3.14159265358979323846;

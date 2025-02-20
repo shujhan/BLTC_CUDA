@@ -9,7 +9,7 @@ using std::cout;
 using std::endl;
 using namespace std;
 
-#define TESTFLAG 0 
+#define TESTFLAG 1 
 
 #define cdpErrchk(ans) { cdpAssert((ans), __FILE__, __LINE__); }
 __device__ void cdpAssert(cudaError_t code, const char *file, int line, bool abort=true)
@@ -37,7 +37,6 @@ __device__ void cdpAssert(cudaError_t code, const char *file, int line, bool abo
  */
 void split_panel(panel *p, double* source_particles, int *tree_size, int *leaf_size){
 
-
     panel *left_child = new panel();
     panel *right_child = new panel();
 
@@ -46,7 +45,6 @@ void split_panel(panel *p, double* source_particles, int *tree_size, int *leaf_s
     left_child->xc = (p->xinterval[0] + p->xc)/2.0;
     left_child->level = p->level + 1;
     left_child->parent = p;
-    left_child->num_members = 0;
     for (int k=0;k<PP;k++){
         left_child->s[k] = 0.5 * ( left_child->xinterval[0] + left_child->xinterval[1] + std::cos(k*pi/PP)*( left_child->xinterval[1] - left_child->xinterval[0]  ));
     }
@@ -56,7 +54,6 @@ void split_panel(panel *p, double* source_particles, int *tree_size, int *leaf_s
     right_child->xc = (p->xinterval[1] + p->xc)/2.0;
     right_child->level = p->level + 1;
     right_child->parent = p;
-    right_child->num_members = 0;
     for (int k=0;k<PP;k++){
         right_child->s[k] = 0.5 * ( right_child->xinterval[0] + right_child->xinterval[1] + std::cos(k*pi/PP)*( right_child->xinterval[1] - right_child->xinterval[0]  ));
     }
@@ -67,17 +64,33 @@ void split_panel(panel *p, double* source_particles, int *tree_size, int *leaf_s
     cout << "Splitting particles with " << p->num_members << " Members" << endl;
 #endif
 
-    left_child->members[0] = p->members[0];
-    right_child->members[1] = p->members[1];
-    for(size_t k=p->members[0];p->members[1];k++){
-        if(source_particles[k] >= p->xc){
-            left_child->members[1] = k-1;
-            right_child->members[0] = k;
-            break;
-        }
+    // Handle empty panel case
+    if (source_particles[p->members[0]] >= p->xc){
+        left_child->num_members = 0;
+        right_child->members[0] = p->members[0];
+        right_child->members[1] = p->members[1];
+        right_child->num_members = p->num_members;
     }
-    left_child->num_members = left_child->members[1] - left_child->members[0] + 1;
-    right_child->num_members = right_child->members[1] - right_child->members[0] + 1;
+    else if (source_particles[p->members[1]] < p->xc){
+        right_child->num_members = 0;
+        left_child->members[0] = p->members[0];
+        left_child->members[1] = p->members[1];
+        left_child->num_members = p->num_members;
+    }
+    else{
+        left_child->members[0] = p->members[0];
+        right_child->members[1] = p->members[1];
+
+        for(size_t k=p->members[0];p->members[1];k++){
+            if(source_particles[k] >= p->xc){
+                left_child->members[1] = k-1;
+                right_child->members[0] = k;
+                break;
+            }
+        }
+        left_child->num_members = left_child->members[1] - left_child->members[0] + 1;
+        right_child->num_members = right_child->members[1] - right_child->members[0] + 1;
+    }
 
     
 #if TESTFLAG
@@ -85,22 +98,36 @@ void split_panel(panel *p, double* source_particles, int *tree_size, int *leaf_s
 #endif
 
 
-    p->left_child = left_child;
-    p->right_child = right_child;
-
-    *tree_size += 2;
+    if (left_child->num_members > 0){
+        p->left_child = left_child;
+        *tree_size += 1;
+    }
+    else{
+        p->left_child = NULL;
+    }
+    if (right_child->num_members > 0){
+        p->right_child = right_child;
+        *tree_size += 1;
+    }
+    else{
+        p->right_child = NULL;
+    }
 
     if( left_child->num_members > N0  ){
         split_panel(p->left_child, source_particles, tree_size, leaf_size);
     }
-    else{
+    else if (left_child->num_members != 0){
         *leaf_size += 1;
+        left_child->right_child = NULL;
+        left_child->left_child = NULL;
     }
     if (right_child->num_members > N0 ){
         split_panel(p->right_child, source_particles, tree_size, leaf_size);
     }
-    else{
+    else if (right_child->num_members != 0){
         *leaf_size += 1;
+        right_child->right_child = NULL;
+        right_child->left_child = NULL;
     }
 
 }
@@ -180,7 +207,7 @@ void init_interaction_lists(panel* leaf, panel* source_panel, int *near_ids, int
         double source_radius = source_panel->xc - source_panel->xinterval[0];
         double distance = std::fabs(leaf->xc - source_panel->xc);
         ///////////////////////////// THIS LINE FOR PERIODIC CONDITIONS //////////////////////////
-//        distance = std::fmin(distance, period-distance);
+        distance = std::fmin(distance, std::fabs(period-distance));
 //        /////////////////////////////////////////////////////////////////////////////////////
 #if TESTFLAG
         cout << "Leaf Id, Source ID, Leaf radius, source radius, distance, ratio: " << endl;
@@ -192,8 +219,12 @@ void init_interaction_lists(panel* leaf, panel* source_panel, int *near_ids, int
             leaf->far_size += 1;
         }
         else{
-            init_interaction_lists(leaf, source_panel->left_child, near_ids, far_ids, near_index, far_index, leaf_id, leaf_size, period);
-            init_interaction_lists(leaf, source_panel->right_child, near_ids, far_ids, near_index, far_index, leaf_id, leaf_size, period);
+            if(source_panel->left_child){
+                init_interaction_lists(leaf, source_panel->left_child, near_ids, far_ids, near_index, far_index, leaf_id, leaf_size, period);
+            }
+            if(source_panel->right_child){
+                init_interaction_lists(leaf, source_panel->right_child, near_ids, far_ids, near_index, far_index, leaf_id, leaf_size, period);
+            }
         }
     }
 }
@@ -214,6 +245,7 @@ void init_tree_list(panel *p, panel *tree_list, int *current_id, int *leaf_indic
     }
    // Handle leafs
     if (!(p->left_child) && !(p->right_child)){
+        cout << "Setting leaf index to " << *current_id-1 << endl;
         leaf_indicies[*leaf_id] = *current_id - 1;
         *leaf_id += 1;
     }
@@ -221,12 +253,11 @@ void init_tree_list(panel *p, panel *tree_list, int *current_id, int *leaf_indic
 
 // This will eventually read L from the interface class
 __device__ double kernel(double x, double y){
-/*    const double eps = 1e-8;
+    const double eps = 1e-1;
     double z = x - y;
     z = z - round(z);
     return 0.5 * z * sqrt(1.0 + 4.0 * eps * eps) * rsqrt( z*z + eps*eps  ) - z;
-    */
-    return x*y;
+    //return x*y;
 }
 
 __global__ void computepanelsum(double *e_field, panel *leaf_panel, panel *tree_list, double *target_particles, double *source_particles, double *weights, int *d_near_list, int *d_far_list, int leaf_id, int leaf_size){
@@ -332,13 +363,22 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     int leaf_size = 0;
 
 
-    split_panel(&root, source_particles, &tree_size, &leaf_size);
+    if (source_size > N0){
+        split_panel(&root, source_particles, &tree_size, &leaf_size);
+    }
+    else{ 
+        root.left_child = NULL;
+        root.right_child = NULL;
+        leaf_size=1;  
+    }
 
     panel tree_list[tree_size];
     int leaf_indicies[leaf_size];
 
     int id = 0;
     int leaf_id = 0;
+
+    cout << "Initilizing tree list" << endl;
 
 
     init_tree_list(&root, tree_list, &id, leaf_indicies, &leaf_id);
@@ -347,13 +387,17 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     cout << endl;
     cout << "Tree list is" << endl;
     for (int k=0;k<tree_size;k++){
-        cout << "Range: [" << tree_list[k].xinterval[0] << "," << tree_list[k].xinterval[1] << "]\t ID: " << tree_list[k].id << endl;
+        cout << "Range: [" << tree_list[k].xinterval[0] << "," << tree_list[k].xinterval[1] << "]\t Particles: [" << tree_list[k].members[0] << "," << tree_list[k].members[1] <<  "]\t ID: " << tree_list[k].id << endl;
     }
     cout << endl;
     cout << "Leaf indicies are" << endl;
     for (int k=0;k<leaf_size;k++){
         cout << "Range: [" << tree_list[leaf_indicies[k]].xinterval[0] << "," << tree_list[leaf_indicies[k]].xinterval[1] << "]\t ID: " << leaf_indicies[k] << endl;
     }
+    cout << endl;
+
+    cout << "Tree list length: " << tree_size << endl;
+    cout << "Number of leafs: " << leaf_size << endl;
     cout << endl;
 #endif
 
@@ -469,8 +513,12 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     cout << endl;
 #endif
 
-    free_tree_list(root.left_child);
-    free_tree_list(root.right_child);
+    if (root.left_child){
+        free_tree_list(root.left_child);
+    }
+    if (root.right_child){
+        free_tree_list(root.right_child);
+    }
 
     //Should set this dynamically eventually
     cudaDeviceSetLimit(cudaLimitDevRuntimePendingLaunchCount, 16384);
@@ -485,6 +533,12 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     for(size_t k=0;k<source_size;k++){
         e_field[source_indicies[k]] = ordered_e_field[k];
     }
+
+#if TESTFLAG
+    for (size_t k=0;k<source_size;k++){
+        cout << "e[" << k << "] = " << e_field[k] << endl;
+    }
+#endif
 
     cudaFree(d_tree_list);
     cudaFree(d_particles);
