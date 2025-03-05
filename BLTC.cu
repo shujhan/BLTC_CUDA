@@ -42,20 +42,20 @@ void split_panel(panel *p, double* source_particles, int *tree_size, int *leaf_s
 
     left_child->xinterval[0] = p->xinterval[0];
     left_child->xinterval[1] = p->xc;
-    left_child->xc = (p->xinterval[0] + p->xc)/2.0;
+    left_child->xc = 0.5 * (p->xinterval[0] + p->xc);
     left_child->level = p->level + 1;
     left_child->parent = p;
     for (int k=0;k<PP;k++){
-        left_child->s[k] = 0.5 * ( left_child->xinterval[0] + left_child->xinterval[1] + std::cos(k*pi/PP)*( left_child->xinterval[1] - left_child->xinterval[0]  ));
+        left_child->s[k] = 0.5 * ( left_child->xinterval[0] + left_child->xinterval[1] + std::cos(k*pi/P)*( left_child->xinterval[1] - left_child->xinterval[0]  ));
     }
 
     right_child->xinterval[0] = p->xc;
     right_child->xinterval[1] = p->xinterval[1];
-    right_child->xc = (p->xinterval[1] + p->xc)/2.0;
+    right_child->xc = 0.5 * (p->xinterval[1] + p->xc);
     right_child->level = p->level + 1;
     right_child->parent = p;
     for (int k=0;k<PP;k++){
-        right_child->s[k] = 0.5 * ( right_child->xinterval[0] + right_child->xinterval[1] + std::cos(k*pi/PP)*( right_child->xinterval[1] - right_child->xinterval[0]  ));
+        right_child->s[k] = 0.5 * ( right_child->xinterval[0] + right_child->xinterval[1] + std::cos(k*pi/P)*( right_child->xinterval[1] - right_child->xinterval[0]  ));
     }
 
 #if TESTFLAG
@@ -65,13 +65,13 @@ void split_panel(panel *p, double* source_particles, int *tree_size, int *leaf_s
 #endif
 
     // Handle empty panel case
-    if (source_particles[p->members[0]] >= p->xc){
+    if (source_particles[p->members[0]] > p->xc){
         left_child->num_members = 0;
         right_child->members[0] = p->members[0];
         right_child->members[1] = p->members[1];
         right_child->num_members = p->num_members;
     }
-    else if (source_particles[p->members[1]] < p->xc){
+    else if (source_particles[p->members[1]] <= p->xc){
         right_child->num_members = 0;
         left_child->members[0] = p->members[0];
         left_child->members[1] = p->members[1];
@@ -82,7 +82,7 @@ void split_panel(panel *p, double* source_particles, int *tree_size, int *leaf_s
         right_child->members[1] = p->members[1];
 
         for(size_t k=p->members[0];p->members[1];k++){
-            if(source_particles[k] >= p->xc){
+            if(source_particles[k] > p->xc){
                 left_child->members[1] = k-1;
                 right_child->members[0] = k;
                 break;
@@ -203,15 +203,22 @@ void init_interaction_lists(panel* leaf, panel* source_panel, int *near_ids, int
         leaf->near_size += 1;
     }
     else{
-        double leaf_radius = leaf->xc - leaf->xinterval[0];
-        double source_radius = source_panel->xc - source_panel->xinterval[0];
+        //double leaf_radius = leaf->xc - leaf->xinterval[0];
+        double leaf_radius = leaf->xinterval[1] - leaf->xc;
+        //double source_radius = source_panel->xc - source_panel->xinterval[0];
+        double source_radius = source_panel->xinterval[1] - source_panel->xc;
         double distance = std::fabs(leaf->xc - source_panel->xc);
         ///////////////////////////// THIS LINE FOR PERIODIC CONDITIONS //////////////////////////
         distance = std::fmin(distance, std::fabs(period-distance));
-//        /////////////////////////////////////////////////////////////////////////////////////
+        //////////////////////////////////////////////////////////////////////////////////////////
+        
 #if TESTFLAG
-        cout << "Leaf Id, Source ID, Leaf radius, source radius, distance, ratio: " << endl;
-        cout << leaf->id << "\t" << source_panel->id << "\t" << leaf_radius << "\t" << source_radius << "\t" << distance << "\t" << (leaf_radius + source_radius) / distance << endl;
+        cout << "Leaf Id, Source ID, Leaf Interval, Source Interval, Leaf radius, source radius, distance, ratio: " << endl;
+        cout << leaf->id << "\t" << source_panel->id << "\t [";
+        cout << leaf->xinterval[0] << "," << leaf->xinterval[1] << "]\t [";
+        cout <<  source_panel->xinterval[0] << "," << source_panel->xinterval[1] << "]\t";
+        cout << leaf_radius << "\t" << source_radius << "\t" << distance << "\t";
+        cout << (leaf_radius + source_radius) / distance << endl;
 #endif
         if ( (leaf_radius + source_radius) / distance < MAC){
             far_ids[leaf_id*leaf_size + *far_index] = source_panel->id;
@@ -350,9 +357,11 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     //root.xinterval[0] = xmin - 0.001;
     //root.xinterval[1] = xmax + 0.001;
     //root.xc = (xmax + xmin) / 2;
-    root.xinterval[0] = 0.0;
-    root.xinterval[1] = L;
-    root.xc = L/2;
+    //root.xinterval[0] = 0.0;
+    //root.xinterval[1] = L;
+    root.xinterval[0] = xmin-0.001;
+    root.xinterval[1] = xmax+0.001;
+    root.xc = (root.xinterval[0] + root.xinterval[1])/2;
     root.level = 0;
     root.num_members = source_size;
     for (int k=0;k<PP;k++){
@@ -417,10 +426,15 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
 #if TESTFLAG
     cout << endl;
     for(int k=0;k<leaf_size;k++){
-        cout << "Leaf " << k << " has ID " << leaf_indicies[k] << " and near Ids" << endl;
+        cout << "Leaf " << k << " [" << tree_list[leaf_indicies[k]].xinterval[0] << "," << tree_list[leaf_indicies[k]].xinterval[1] << "] has ID " << leaf_indicies[k] << " and near Ids" << endl;
         for(int i=0;i<leaf_size;i++){
             if (near_interactions[k*leaf_size + i] == -1){break;}
             cout << near_interactions[k*leaf_size + i] << "\t";
+        }
+        cout << endl;
+        for(int i=0;i<leaf_size;i++){
+            if (near_interactions[k*leaf_size + i] == -1){break;}
+            cout << "[" << tree_list[near_interactions[k*leaf_size + i]].xinterval[0] << " , " << tree_list[near_interactions[k*leaf_size+i]].xinterval[1] << "]\t";
         }
         cout << endl;
         cout << "and far Ids" << endl;
@@ -428,6 +442,12 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
             if (far_interactions[k*leaf_size + i] == -1){break;}
             cout << far_interactions[k*leaf_size + i] << "\t";
         }
+        cout << endl;
+        for(int i=0;i<leaf_size;i++){
+            if (far_interactions[k*leaf_size + i] == -1){break;}
+            cout << "[" << tree_list[far_interactions[k*leaf_size + i]].xinterval[0] << " , " << tree_list[far_interactions[k*leaf_size+i]].xinterval[1] << "]\t";
+        }
+        cout << endl;
         cout << endl;
     }
     cout << endl;
