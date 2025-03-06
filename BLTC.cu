@@ -9,7 +9,9 @@ using std::cout;
 using std::endl;
 using namespace std;
 
-#define TESTFLAG 1 
+const double L = 4*pi;
+
+#define TESTFLAG 0 
 
 #define cdpErrchk(ans) { cdpAssert((ans), __FILE__, __LINE__); }
 __device__ void cdpAssert(cudaError_t code, const char *file, int line, bool abort=true)
@@ -138,6 +140,13 @@ void free_tree_list(panel *panel){
     free(panel);
 }
 
+//TODO This kernel has very low occupancy -- try to optimize
+//Might be able to do some loop unrolling / dynamic parallelism
+//If nothing else, can identify 1 thread per PP loop iteration (should have next to no communication
+//in each case)
+//Currently has very low warp efficiency (lots of thread divergence)
+// - Should launch with PP*tree_size threads, so that each thread gets one panel and one iteration of each PP loop
+//   - Should also keep local variables for several vars (w1[i], p->modified_weights[k], etc) to reduce global memory acesses
 __global__ void init_modified_weights(panel *d_tree_list, double *d_particles, double *d_weights, int source_size, int tree_size){
     int idx = blockIdx.x*blockDim.x + threadIdx.x;
 
@@ -165,6 +174,7 @@ __global__ void init_modified_weights(panel *d_tree_list, double *d_particles, d
         p->modified_weights[k] = 0.0;
     }
 
+    //bool close;
     // set up modified weights 
     for (int k = p->members[0]; k <= p->members[1]; k++) {
         double y = d_particles[k]; // particles in cluster
@@ -178,6 +188,14 @@ __global__ void init_modified_weights(panel *d_tree_list, double *d_particles, d
                 a1[i] = w1[i] /(y - p->s[i]);
                 sum += a1[i];
             }
+
+            // This possibly avoids some thread divergence at the cost of using an extra register
+            // and some extra arithmetic ops
+            // Appears to produce the same result as above, but this hasn't been tested thouroughly
+           //close = fabs(y - p->s[i]) <= DBL_MIN;
+           //flag = i*close - (1-close); // = i if close=1, =-1 if close=0
+           //a1[i] = w1[i] / (y - p->s[i] + close) * (1-close); // =a1[i] if close=0, =0 if close=1
+           //sum += a1[i];
         }
 
         if (flag > -1) {
@@ -252,7 +270,9 @@ void init_tree_list(panel *p, panel *tree_list, int *current_id, int *leaf_indic
     }
    // Handle leafs
     if (!(p->left_child) && !(p->right_child)){
+#if TESTFLAG
         cout << "Setting leaf index to " << *current_id-1 << endl;
+#endif
         leaf_indicies[*leaf_id] = *current_id - 1;
         *leaf_id += 1;
     }
@@ -261,9 +281,9 @@ void init_tree_list(panel *p, panel *tree_list, int *current_id, int *leaf_indic
 // This will eventually read L from the interface class
 __device__ double kernel(double x, double y){
     const double eps = 1e-1;
-    double z = x - y;
+    double z = (x - y)/L;
     z = z - round(z);
-    return 0.5 * z * sqrt(1.0 + 4.0 * eps * eps) * rsqrt( z*z + eps*eps  ) - z;
+    return 0.5 * z * sqrt(1.0 + 4.0 * eps * eps / (L*L)) * rsqrt( z*z + eps*eps/(L*L)  ) - z;
     //return x*y;
 }
 
@@ -330,7 +350,7 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     }
 #endif
     // TODO Need to sort particles and also re-sort the corresponding weights
-    size_t source_indicies[source_size];
+    size_t* source_indicies = (size_t*)malloc(sizeof(size_t)*source_size);
     for(size_t k=0;k<source_size;k++){
         source_indicies[k] = k;
     }
@@ -342,7 +362,6 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     }
 #endif
 
-    const double L = 1.0;
 
 
     panel root;
@@ -381,6 +400,8 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
         leaf_size=1;  
     }
 
+    cout << "Set up root panel" << endl;
+
     panel tree_list[tree_size];
     int leaf_indicies[leaf_size];
 
@@ -410,6 +431,8 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     cout << endl;
 #endif
 
+    cout << "Initilized tree list" << endl;
+
     int near_interactions[leaf_size*leaf_size];
     int far_interactions[leaf_size*leaf_size];
     for (size_t k=0;k<leaf_size*leaf_size;k++){
@@ -422,6 +445,8 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
         int far_index = 0;
         init_interaction_lists(tree_list+leaf_indicies[k], &root, near_interactions, far_interactions, &near_index, &far_index, k, leaf_size, L); 
     }
+
+    cout << "Initilized interaction lists" << endl;
 
 #if TESTFLAG
     cout << endl;
@@ -452,6 +477,9 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     }
     cout << endl;
 #endif
+
+    // TODO Move initilization/memory transfer of everything except tree items to be before the tree is
+    // constructed (concurrency between data tranfer to GPU and CPU operations)
 
     // Initilize device vars
     panel *d_tree_list;
@@ -511,8 +539,11 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     if(checkcudaerr(errcode) != 0){cout << "Failed copying leaf indicies to device" << endl;}
 
     int blocksize = 128;
+    // TODO Should this be tree_size + blocksize + 1 ?
     int gridlen = (source_size + blocksize - 1) / blocksize;
     init_modified_weights<<<gridlen,blocksize>>>(d_tree_list, d_particles, d_weights, source_size, tree_size);
+
+    cout << "Initilized modified weights" << endl;
 
 #if TESTFLAG
     errcode = cudaMemcpy(tree_list, d_tree_list, tree_size*sizeof(panel), cudaMemcpyDeviceToHost);
@@ -546,13 +577,17 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     gridlen = (leaf_size + blocksize - 1) / blocksize;
     computesum<<<gridlen,blocksize>>>(d_efield, d_tree_list, d_leaf_indicies, d_targets, d_particles, d_weights, d_near_list, d_far_list, leaf_size);
 
-    double ordered_e_field[source_size];
+    cout << "Computed BLTC sum" << endl;
+
+    double* ordered_e_field = (double*)malloc(sizeof(double)*source_size);
     errcode = cudaMemcpy(ordered_e_field, d_efield, target_size*sizeof(double), cudaMemcpyDeviceToHost);
     if(checkcudaerr(errcode) != 0){cout << "Failed to copy e_field to host" << endl;}
 
+    // TODO This can be done more quickly with the GPU
     for(size_t k=0;k<source_size;k++){
         e_field[source_indicies[k]] = ordered_e_field[k];
     }
+    free(source_indicies);
 
 #if TESTFLAG
     for (size_t k=0;k<source_size;k++){

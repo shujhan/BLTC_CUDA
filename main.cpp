@@ -30,30 +30,31 @@ void treeprint(panel *p){
 }
 
 int main(int argc, char** argv) {
-    const double L = 1.0;
+    const double L = 4*pi;
     const size_t N = argc==2 ? atoi(argv[1]) : 128*128;
     const double dx = L/N;
 
     cout << "N = " << N << endl;
     cout << "Interp degree = " << P << endl;
     cout << "MAC = " << MAC << endl;
+    cout << "L = " << L << endl;
     
 
     // initialzied root using new 
-    double locs[N];
-    double source_locs[N];
+    double* locs = (double*)malloc(sizeof(double)*N);
+    double* source_locs = (double*)malloc(sizeof(double)*N);
     for (size_t k = 0; k < N; k++){
         // Maybe need to handle nondistinct particles
-        locs[k] = std::fmod( 0.5 * cos( 2*pi/L * (k+1) * dx ) + (k+1)*dx, L );
-        source_locs[k] = std::fmod( 0.5 * cos( 2*pi/L * (k+1) * dx ) + (k+1)*dx, L );
+        locs[k] = std::fmod( 0.5 * cos( 2*pi * (k+1) * dx ) + (k+1)*dx, L );
+        source_locs[k] = std::fmod( 0.5 * cos( 2*pi * (k+1) * dx ) + (k+1)*dx, L );
         while(locs[k] < 0){ locs[k] += L;  }
         while(source_locs[k] < 0){ source_locs[k] += L;  }
         //cout << k << "\t" << locs[k] << endl;
        // locs[k] = ((int)k)*dx;
     }
     
-    double e_field[N];
-    double weights[N];
+    double* e_field = (double*)malloc(sizeof(double)*N);
+    double* weights = (double*)malloc(sizeof(double)*N);
     for (int k=0;k<N;k++){
         weights[k] = 1.0;
     }
@@ -72,9 +73,7 @@ int main(int argc, char** argv) {
     }
 //#endif
 
-    double direct_e[N];
-    double direct_e_par[N];
-    double direct_e_par_dyn[N];
+    double* direct_e_par = (double*)malloc(sizeof(double)*N);
 
     cout << endl << "Calling direct sum parallel" << endl;
     start = high_resolution_clock::now();
@@ -108,6 +107,12 @@ int main(int argc, char** argv) {
     cout << "Max error was " << setprecision(16) << sqrt(maxerr) << " at particle " << maxk << endl;
     cout << "BLTC: e[" << maxk << "] = " << setprecision(16) << e_field[maxk] << endl;
     cout << "Direct sum: e[" << maxk << "] = " << setprecision(16) << direct_e_par[maxk] << endl;
+
+    free(locs);
+    free(source_locs);
+    free(e_field);
+    free(weights);
+    free(direct_e_par);
 
 
 /*

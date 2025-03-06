@@ -4,13 +4,16 @@
 using std::cout;
 using std::endl;
 
-#define TESTFLAG 1 
+static const double pi = 3.14159265358979323846;
+const double L = 4*pi;
+
+#define TESTFLAG 0 
 
 __device__ double kernelp(double x, double y){
     double const eps = 1e-1;
-    double z = x - y;
+    double z = (x - y)/L;
     z = z - round(z);
-    return 0.5 * z * sqrt(1 + 4 * eps * eps) * rsqrt( z*z + eps*eps  ) - z;
+    return 0.5 * z * sqrt(1 + 4 * eps * eps/(L*L)) * rsqrt( z*z + eps*eps/(L*L)  ) - z;
     
 //    return x*y;
 }
@@ -18,9 +21,9 @@ __device__ double kernelp(double x, double y){
 double kernels(double x, double y){
     
     double const eps = 1e-1;
-    double z = x - y;
+    double z = (x - y)/L;
     z = z - round(z);
-    return 0.5 * z * sqrt(1 + 4 * eps * eps) * rsqrt( z*z + eps*eps  ) - z;
+    return 0.5 * z * sqrt(1 + 4 * eps * eps/(L*L)) * rsqrt( z*z + eps*eps/(L*L)  ) - z;
     
 //    return x*y;
 }
