@@ -5,20 +5,6 @@
 #include<cfloat>
 #include<cstring>
 
-// Set numerical paramters
-static const size_t numpars_s = 10000;  // num particles
-static const size_t N0 = 1; // Max points in a leaf
-static const size_t Nmin = 1; // Min points in a leaf
-//static const max_level = 10;
-static const double pi = 3.14159265358979323846;
-static const int P = 8; // Order of Far-field approximation
-static const int PP = P + 1;
-static const int Pflat = PP;
-static const double MAC = 0.6;
-
-//static const double eps = 0.1;  // Regularization param
-//
-
 typedef struct panel panel;
 
 struct panel
@@ -42,15 +28,117 @@ struct panel
     
 };
 
+class ElectricField {
+    public: 
+        virtual void operator()     (double* es, double* targets, int nt, 
+                                    double* sources, double* q_ws, int ns) = 0;
+        virtual void print_field_obj() = 0;
+        virtual ~ElectricField();
+};
+
+class E_MQ_DirectSum : public ElectricField {
+    public:
+        E_MQ_DirectSum();
+        E_MQ_DirectSum(double L, double epsilon);
+        void operator() (double* es, double* targets, int nt, 
+                        double* sources, double* q_ws, int ns) override;
+        void print_field_obj();
+        ~E_MQ_DirectSum();
+    private:
+        double epsilon;
+        double L;
+};
+
+class E_MQ_Treecode : public ElectricField {
+    public:
+        E_MQ_Treecode();
+        // E_MQ_Treecode(double L, double epsilon, double beta);
+        E_MQ_Treecode(double L, double epsilon,
+                  double mac, int degree, int max_source, int max_target,
+                  int verbosity);
+        void operator() (double* es, double* targets, int nt, 
+                        double* sources, double* q_ws, int ns) override;
+        void print_field_obj();
+        ~E_MQ_Treecode() override;
+
+    private:
+
+    // Set numerical paramters
+    // size_t N;  // num particles
+    size_t N0; // Max points in a leaf
+    size_t Nmin = 1; // Min points in a leaf
+    double pi = 3.14159265358979323846;
+    int P; // Order of Far-field approximation
+    int PP; // = P + 1
+    int Pflat; // = PP
+    
+    double L;
+    double epsilon;
+    double MAC;
+    int max_source;
+    int max_target;
+
+    double sq_theta;
+    double norm_epsL;
+    double epsLsq;
+
 // weights size = target_size
 void BLTC(double *e_field, double *source_particles, double *target_particles, double *weights, 
         size_t e_field_size, size_t source_size, size_t target_size);
 
+// void quicksort(source_particles, (int)source_size, source_indicies);
+
 // Called recursivley from root panel to build tree
 void split_panel(panel *p, double* source_particles, int *tree_size, int *leaf_size);
 
-void init_modified_weights(panel *p, double *source_particles, double *weights, size_t source_size);
+void init_tree_list(panel *p, panel *tree_list, int *current_id, int *leaf_indicies, int *leaf_id);
 
-//void init_tree_list(panel *p, std::vector<panel> tree_list, int *current_id, std::vector<int> leaf_indicies);
+void init_interaction_lists(panel* leaf, panel* source_panel, int *near_ids, int *far_ids, int *near_index, int *far_index, int leaf_id, int leaf_size, double period);
+
+__global__ void init_modified_weights(panel *d_tree_list, double *d_particles, double *d_weights, int source_size, int tree_size);
+
+__global__ void computesum(double *e_field, panel *tree_list, int *leaf_indicies, double *target_particles, double *source_particles, double *weights, int *d_near_list, int *d_far_list, int leaf_size);
+
+__global__ void computepanelsum(double *e_field, panel *leaf_panel, panel *tree_list, double *target_particles, double *source_particles, double *weights, int *d_near_list, int *d_far_list, int leaf_id, int leaf_size);
+
+__device__ double kernel(double x, double y);
+
+void free_tree_list(panel *panel);
+
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 #endif

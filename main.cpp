@@ -30,14 +30,32 @@ void treeprint(panel *p){
 }
 
 int main(int argc, char** argv) {
-    const double L = 1.0;
-    const size_t N = argc==2 ? atoi(argv[1]) : 128*128;
+    // Parse arguments 
+    double L = std::stod(argv[1]);
+    double greens_epsilon = std::stod(argv[2]);
+    double mac = std::stod(argv[3]);
+    double degree = std::stod(argv[4]);
+    double max_source = std::stod(argv[5]);
+    double max_target = std::stod(argv[6]);
+    int N = std::stoi(argv[7]);
+    int verbosity = 0;
+    int use_treecode = std::stoi(argv[8]);
+    int Nstep = std::stoi(argv[9]);
+    double dt = std::stoi(argv[10]);
+
     const double dx = L/N;
 
-    cout << "N = " << N << endl;
-    cout << "Interp degree = " << P << endl;
-    cout << "MAC = " << MAC << endl;
+    cout << "L = " << L << endl;
+    cout << "greens_epsilon = " << greens_epsilon << endl;
+    cout << "mac = " << mac << endl;
+    cout << "degree = " << degree << endl;
+    cout << "numpars_s = " << numpars_s << endl;
+
     
+// create constructor ()
+
+
+
 
     // initialzied root using new 
     double locs[N];

@@ -11,6 +11,10 @@ using namespace std;
 
 #define TESTFLAG 1 
 
+// constructors for Direct sum 
+
+
+
 #define cdpErrchk(ans) { cdpAssert((ans), __FILE__, __LINE__); }
 __device__ void cdpAssert(cudaError_t code, const char *file, int line, bool abort=true)
 {
@@ -20,6 +24,37 @@ __device__ void cdpAssert(cudaError_t code, const char *file, int line, bool abo
 	if (abort) assert (0);
     }
 }
+
+
+// add constructors
+E_MQ_Treecode::E_MQ_Treecode() {}
+
+// Definitions for E_MQ_Treecode
+E_MQ_Treecode::E_MQ_Treecode(double L, double epsilon,
+                             double mac, int degree, int max_source, int max_target,
+                             int verbosity)
+    : L(L), epsilon(epsilon), MAC(mac), P(degree),
+      max_source(max_source), max_target(max_target) {
+        // #ifdef OPENACC_ENABLED
+        // #pragma acc enter data copyin(this)
+        // #endif
+      }
+
+
+    E_MQ_Treecode::~E_MQ_Treecode() 
+    {
+    // #ifdef OPENACC_ENABLED
+    //   #pragma acc exit data delete(this)
+    // #endif
+    };
+
+
+void E_MQ_Treecode::operator() (double* es, double* targets, int nt, 
+                double* sources, double* q_ws, int ns){
+                BLTC(es, sources, targets, q_ws, nt, ns, nt);
+                }
+
+
 
 /* split panel
  *
@@ -35,7 +70,7 @@ __device__ void cdpAssert(cudaError_t code, const char *file, int line, bool abo
  * The id and modified_weights attributes are not set.
  *
  */
-void split_panel(panel *p, double* source_particles, int *tree_size, int *leaf_size){
+void E_MQ_Treecode::split_panel(panel *p, double* source_particles, int *tree_size, int *leaf_size){
 
     panel *left_child = new panel();
     panel *right_child = new panel();
@@ -132,13 +167,13 @@ void split_panel(panel *p, double* source_particles, int *tree_size, int *leaf_s
 
 }
 
-void free_tree_list(panel *panel){
+void E_MQ_Treecode::free_tree_list(panel *panel){
     if(panel->left_child){free_tree_list(panel->left_child);}
     if(panel->right_child){free_tree_list(panel->right_child);}
     free(panel);
 }
 
-__global__ void init_modified_weights(panel *d_tree_list, double *d_particles, double *d_weights, int source_size, int tree_size){
+__global__ void E_MQ_Treecode::init_modified_weights(panel *d_tree_list, double *d_particles, double *d_weights, int source_size, int tree_size){
     int idx = blockIdx.x*blockDim.x + threadIdx.x;
 
     if (idx >= tree_size){return;}
@@ -195,7 +230,7 @@ __global__ void init_modified_weights(panel *d_tree_list, double *d_particles, d
     }
 }
 
-void init_interaction_lists(panel* leaf, panel* source_panel, int *near_ids, int *far_ids, int *near_index, int *far_index, int leaf_id, int leaf_size, double period){
+void E_MQ_Treecode::init_interaction_lists(panel* leaf, panel* source_panel, int *near_ids, int *far_ids, int *near_index, int *far_index, int leaf_id, int leaf_size, double period){
     // Check if source panel is a leaf
     if (!source_panel->left_child && !source_panel->right_child){
         near_ids[leaf_id*leaf_size + *near_index] = source_panel->id;
@@ -237,7 +272,7 @@ void init_interaction_lists(panel* leaf, panel* source_panel, int *near_ids, int
 }
 
 
-void init_tree_list(panel *p, panel *tree_list, int *current_id, int *leaf_indicies, int *leaf_id){
+void E_MQ_Treecode::init_tree_list(panel *p, panel *tree_list, int *current_id, int *leaf_indicies, int *leaf_id){
     
     p->id = *current_id;
     tree_list[*current_id] = *p;
@@ -259,7 +294,7 @@ void init_tree_list(panel *p, panel *tree_list, int *current_id, int *leaf_indic
 }
 
 // This will eventually read L from the interface class
-__device__ double kernel(double x, double y){
+__device__ double E_MQ_Treecode::kernel(double x, double y){
     const double eps = 1e-1;
     double z = x - y;
     z = z - round(z);
@@ -267,7 +302,7 @@ __device__ double kernel(double x, double y){
     //return x*y;
 }
 
-__global__ void computepanelsum(double *e_field, panel *leaf_panel, panel *tree_list, double *target_particles, double *source_particles, double *weights, int *d_near_list, int *d_far_list, int leaf_id, int leaf_size){
+__global__ void E_MQ_Treecode::computepanelsum(double *e_field, panel *leaf_panel, panel *tree_list, double *target_particles, double *source_particles, double *weights, int *d_near_list, int *d_far_list, int leaf_id, int leaf_size){
     int idx = blockIdx.x*blockDim.x + threadIdx.x;
 
     if(idx >= leaf_panel->num_members){return;}
@@ -292,7 +327,7 @@ __global__ void computepanelsum(double *e_field, panel *leaf_panel, panel *tree_
     e_field[member_idx] = local_e;
 }
 
-__global__ void computesum(double *e_field, panel *tree_list, int *leaf_indicies, double *target_particles, double *source_particles, double *weights, int *d_near_list, int *d_far_list, int leaf_size){
+__global__ void E_MQ_Treecode::computesum(double *e_field, panel *tree_list, int *leaf_indicies, double *target_particles, double *source_particles, double *weights, int *d_near_list, int *d_far_list, int leaf_size){
     int idx = blockIdx.x*blockDim.x + threadIdx.x;
 
     if(idx >= leaf_size) {return;}
@@ -320,7 +355,7 @@ int checkcudaerr(cudaError_t err){
 // non-unity weights (just need to re-order properly)
 // target particles differing from source particles (probably just need to swap source to target in a few places)
 
-void BLTC(double *e_field, double *source_particles, double *target_particles, double *weights, 
+void E_MQ_Treecode::BLTC(double *e_field, double *source_particles, double *target_particles, double *weights, 
         size_t e_field_size, size_t source_size, size_t target_size){
 
 #if TESTFLAG
