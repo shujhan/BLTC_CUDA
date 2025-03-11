@@ -1,3 +1,5 @@
+# TEST IF IN FAST
+
 #include "BLTC.hpp"
 #include "quicksort.h"
 #include<cmath>
@@ -550,16 +552,16 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     if(errcode != 0){cout << "Failed to copy tree list to host" << endl;}
 
     for(int k=0;k<tree_size;k++){
-        cout << "Modified weights for panel " << k << endl;
+        cout << "Modified weights for panel " << k << " at [" << tree_list[k].xinterval[0] << "," << tree_list[k].xinterval[1] << "]" << endl;
         for (int j=0;j<PP;j++){
             cout << tree_list[k].modified_weights[j] << "\t";
         }
         cout << endl;
-        cout << "Chebyshev Points for panel " << k << endl;
+        cout << "Chebyshev Points for panel " << k << " at [" << tree_list[k].xinterval[0] << "," << tree_list[k].xinterval[1] << "]" << endl;
         for (int j=0;j<PP;j++){
             cout << tree_list[k].s[j] << "\t";
         }
-        cout << endl;
+        cout << endl << endl;
     }
     cout << endl;
 #endif
