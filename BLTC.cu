@@ -1,5 +1,3 @@
-# TEST IF IN FAST
-
 #include "BLTC.hpp"
 #include "quicksort.h"
 #include<cmath>
@@ -14,6 +12,8 @@ using namespace std;
 const double L = 4*pi;
 
 #define TESTFLAG 0 
+
+#define FULL_MASK 0xffffffff
 
 #define cdpErrchk(ans) { cdpAssert((ans), __FILE__, __LINE__); }
 __device__ void cdpAssert(cudaError_t code, const char *file, int line, bool abort=true)
@@ -31,19 +31,22 @@ __device__ void cdpAssert(cudaError_t code, const char *file, int line, bool abo
  * too large and must themselves be split again, the function is called recursivley.
  * The entire tree can be constructed by passing in the root panel.  In this case
  * tree_size will contain the total number of panels in the tree (minus the root) and
- * leaf_size will contain the number of leaves.
+ * leaf_size will contain the number of leaves.  Empty panels are excluded.
  *
  * This function assumes that xinterval, xc, level, members, and num_members are set in p.
  * It will set these values, set the parent of both children to be p and left_child and
  * right_child of p, initilize near_ids and far_ids to -1, and set the Chebyshev points.  
  * The id and modified_weights attributes are not set.
  *
+ * When this function is called on the root, almost always tree_size and leaf_size should
+ * be set to 0.
  */
 void split_panel(panel *p, double* source_particles, int *tree_size, int *leaf_size){
 
     panel *left_child = new panel();
     panel *right_child = new panel();
 
+    // Set left child characteristics
     left_child->xinterval[0] = p->xinterval[0];
     left_child->xinterval[1] = p->xc;
     left_child->xc = 0.5 * (p->xinterval[0] + p->xc);
@@ -53,6 +56,7 @@ void split_panel(panel *p, double* source_particles, int *tree_size, int *leaf_s
         left_child->s[k] = 0.5 * ( left_child->xinterval[0] + left_child->xinterval[1] + std::cos(k*pi/P)*( left_child->xinterval[1] - left_child->xinterval[0]  ));
     }
 
+    // Set right child characteristics
     right_child->xinterval[0] = p->xc;
     right_child->xinterval[1] = p->xinterval[1];
     right_child->xc = 0.5 * (p->xinterval[1] + p->xc);
@@ -68,7 +72,7 @@ void split_panel(panel *p, double* source_particles, int *tree_size, int *leaf_s
     cout << "Splitting particles with " << p->num_members << " Members" << endl;
 #endif
 
-    // Handle empty panel case
+    // Count members, handling empty panel case
     if (source_particles[p->members[0]] > p->xc){
         left_child->num_members = 0;
         right_child->members[0] = p->members[0];
@@ -102,6 +106,7 @@ void split_panel(panel *p, double* source_particles, int *tree_size, int *leaf_s
 #endif
 
 
+    // Only assign children if they are non-empty
     if (left_child->num_members > 0){
         p->left_child = left_child;
         *tree_size += 1;
@@ -117,6 +122,7 @@ void split_panel(panel *p, double* source_particles, int *tree_size, int *leaf_s
         p->right_child = NULL;
     }
 
+    // Split recursivley
     if( left_child->num_members > N0  ){
         split_panel(p->left_child, source_particles, tree_size, leaf_size);
     }
@@ -136,6 +142,12 @@ void split_panel(panel *p, double* source_particles, int *tree_size, int *leaf_s
 
 }
 
+/* free_tree_list
+ *
+ * This function will recursivley free a panel and all its children.
+ * Passing the root to this function will free the entire tree.
+ *
+*/
 void free_tree_list(panel *panel){
     if(panel->left_child){free_tree_list(panel->left_child);}
     if(panel->right_child){free_tree_list(panel->right_child);}
@@ -149,46 +161,59 @@ void free_tree_list(panel *panel){
 //Currently has very low warp efficiency (lots of thread divergence)
 // - Should launch with PP*tree_size threads, so that each thread gets one panel and one iteration of each PP loop
 //   - Should also keep local variables for several vars (w1[i], p->modified_weights[k], etc) to reduce global memory acesses
+
+/* init_modified_weights
+ *
+ * Calculates the modified weights for the BLTC algorithm.
+ *
+ * This kernel is intended to be called with block sizes of one warp, and assumes that the interpolation degree
+ * is less than one minus the size of one warp (31).  The expectation is that every Chebyshev point in every panel has
+ * one thread associated with it.  Each warp will calculate the modified weights for one panel.
+ *
+ */
 __global__ void init_modified_weights(panel *d_tree_list, double *d_particles, double *d_weights, int source_size, int tree_size){
     int idx = blockIdx.x*blockDim.x + threadIdx.x;
+//    unsigned mask = __ballot_sync(FULL_MASK, threadIdx.x < PP);
+    if (idx >= PP*tree_size){return;}
+//    if (threadIdx.x >= PP){return;}
+    int tree_idx = idx / PP;
+    int cheb_idx = idx - PP*tree_idx;
 
-    if (idx >= tree_size){return;}
+    panel *p = d_tree_list + tree_idx;
 
-    panel *p = d_tree_list + idx;
+    if (threadIdx.x >= PP){double sum = 0.0;}
+    else{
 
-    double w1[PP]; 
-    for (int i = 0; i < PP; i++) {
-        if (i == 0 || i == (PP-1)) {
-            w1[i] = 0.5;
-        }
-        else {
-            w1[i] = 1.0;
-        }
-        if (i % 2 == 1) {
-            w1[i] *= -1.0;
-        }
+    double w1;
+    if (cheb_idx == 0 || cheb_idx == (PP-1)) {
+        w1 = 0.5;
+    }
+    else {
+        w1 = 1.0;
+    }
+    if (cheb_idx % 2 == 1) {
+        w1 *= -1.0;
     }
     
-    double a1[PP]; // the clartiy term in paper 
-   
-    // Initilize modified weights to zero
-    for (int k = 0; k<PP; k++){
-        p->modified_weights[k] = 0.0;
-    }
+    double a1; // the clartiy term in paper 
+    double modified_weight = 0.0;
+    double sum = 0.0;
 
-    //bool close;
     // set up modified weights 
+    // Could unroll this loop and have the second half of a warp do half of these iterations if we are fine with limiting the interpolation degree to be <=14
+    // Could also just have a switch to check that (and a few versions of this function with various levels of loop unrolling)
     for (int k = p->members[0]; k <= p->members[1]; k++) {
         double y = d_particles[k]; // particles in cluster
+        double cheb_pt = p->s[cheb_idx];
         int flag = -1;
-        double sum = 0.0;
-        for (int i = 0; i < PP; i++) {
-            if(fabs(y - p->s[i]) <= DBL_MIN) {
-                flag = i;
+        sum = 0.0;
+        //for (int i = 0; i < PP; i++) {
+            if(fabs(y - cheb_pt) <= DBL_MIN) {
+                flag = cheb_idx;
             }
             else{
-                a1[i] = w1[i] /(y - p->s[i]);
-                sum += a1[i];
+                a1 = w1 /(y - cheb_pt);
+                sum += a1;
             }
 
             // This possibly avoids some thread divergence at the cost of using an extra register
@@ -198,23 +223,49 @@ __global__ void init_modified_weights(panel *d_tree_list, double *d_particles, d
            //flag = i*close - (1-close); // = i if close=1, =-1 if close=0
            //a1[i] = w1[i] / (y - p->s[i] + close) * (1-close); // =a1[i] if close=0, =0 if close=1
            //sum += a1[i];
-        }
+//        }
+        
 
         if (flag > -1) {
-            sum = 1.0;
-            for (int j = 0; j < PP; j++) {
-                a1[j] = 0.0;
-            }  
-            a1[flag] = 1.0;
+            // shfl_xor_sync might be better here
+            flag = __shfl_sync(FULL_MASK, flag, threadIdx.x);
+            a1 = 1.0;
+        }
+        if (flag > -1 && fabs(y - cheb_pt) > DBL_MIN){
+            a1 = 0.0;
+        }
+
+
+        // Use a shfl_down_sync here to reduce sum
+        for (int offset = 16; offset>0; offset /= 2){
+            sum += __shfl_down_sync(FULL_MASK, sum, offset);
         }
 
         double D = 1.0 / sum;
-        for (int i = 0; i < PP; i++) {
-            p->modified_weights[i] += a1[i] * D * d_weights[k];
-        }
+
+        modified_weight += a1 * D * d_weights[k];
+
+    }
+    p->modified_weights[threadIdx.x] = modified_weight;
     }
 }
 
+/* init_interaction_lists
+ *
+ * This function will recursivley initilize the interaction list for the given leaf.  
+ * Near interactions will be inserted to the array near_ids and far interactions
+ * will be inserted into far_ids.  Each of these arrays should be of length leaf_size*leaf_size.
+ * Each sequential leaf_size subset of these id arrays will contain the ids of panels which the source
+ * panel has a near/far interaction with, followed by -1's to pad to the maximum length of leaf_size.
+ *
+ * The intention is for this function to be called initially with the source_panel set to the root panel,
+ * and near_index and far_index both set to 0.
+ *
+ * TODO: This could probably be wrapped into a class interface, and an overloaded method could be defined without
+ *       the source_panel, near_index, and far_index which simply calls this method with source_panel=root, near_index
+ *       and far_index set to 0.
+ *
+ */
 void init_interaction_lists(panel* leaf, panel* source_panel, int *near_ids, int *far_ids, int *near_index, int *far_index, int leaf_id, int leaf_size, double period){
     // Check if source panel is a leaf
     if (!source_panel->left_child && !source_panel->right_child){
@@ -223,9 +274,7 @@ void init_interaction_lists(panel* leaf, panel* source_panel, int *near_ids, int
         leaf->near_size += 1;
     }
     else{
-        //double leaf_radius = leaf->xc - leaf->xinterval[0];
         double leaf_radius = leaf->xinterval[1] - leaf->xc;
-        //double source_radius = source_panel->xc - source_panel->xinterval[0];
         double source_radius = source_panel->xinterval[1] - source_panel->xc;
         double distance = std::fabs(leaf->xc - source_panel->xc);
         ///////////////////////////// THIS LINE FOR PERIODIC CONDITIONS //////////////////////////
@@ -245,6 +294,7 @@ void init_interaction_lists(panel* leaf, panel* source_panel, int *near_ids, int
             *far_index += 1;
             leaf->far_size += 1;
         }
+        // If not a far interaction, recursivley check source_panel's children
         else{
             if(source_panel->left_child){
                 init_interaction_lists(leaf, source_panel->left_child, near_ids, far_ids, near_index, far_index, leaf_id, leaf_size, period);
@@ -256,7 +306,17 @@ void init_interaction_lists(panel* leaf, panel* source_panel, int *near_ids, int
     }
 }
 
-
+/* init_tree_list
+ *
+ * Recursivley initilizes the tree list and leaf list.  
+ * This is just an array which contains all panels in the tree, keeping track of which
+ * indicies in this array correspond to leaves.  Essentially flattens the tree for easier
+ * use on the GPU.
+ *
+ * This function is intended to be called with the panel set to the root, and current_id and leaf_id
+ * set to 0.  leaf_indicies should have length leaf_size, and tree_list should have length tree_size.
+ *
+ */
 void init_tree_list(panel *p, panel *tree_list, int *current_id, int *leaf_indicies, int *leaf_id){
     
     p->id = *current_id;
@@ -341,9 +401,42 @@ int checkcudaerr(cudaError_t err){
 // Multi-GPU
 // non-unity weights (just need to re-order properly)
 // target particles differing from source particles (probably just need to swap source to target in a few places)
+// Avoid particle sort -- probably requires changing panel data structure a bit
+//    - Could use a hash table to associate panels with particle indicies
+//    - Might be able to get away with only storing particle indicies with leafs, then tracking which
+//      leafs are children of a particular panel (maybe even a second hash table)
+//      Advatange would be that we do not need to keep as much memory per value of the first hash table
+//      cuCollections could be useful here, but it is still under pretty active development so might not be super stable
+// Should check if anything can be accelerated with CCCL (Thrust/CUB)
 
 void BLTC(double *e_field, double *source_particles, double *target_particles, double *weights, 
         size_t e_field_size, size_t source_size, size_t target_size){
+
+    // Initilize device vars
+    panel *d_tree_list;
+    double *d_particles;
+    double *d_targets;
+    double *d_weights;
+    double *d_efield;
+    int *d_near_list;
+    int *d_far_list;
+    int *d_leaf_indicies;
+
+    cudaError_t errcode;
+
+
+    errcode = cudaMalloc(&d_particles, source_size*sizeof(double));
+    if(checkcudaerr(errcode) !=0){cout << "Failed allocating source particles" << endl;}
+
+    errcode = cudaMalloc(&d_targets, target_size*sizeof(double));
+    if(checkcudaerr(errcode) !=0){cout << "Failed allocating target particles" << endl;}
+
+    errcode = cudaMalloc(&d_weights, source_size*sizeof(double));
+    if(checkcudaerr(errcode) != 0){cout << "Failed allocating source weights" << endl;}
+
+    errcode = cudaMalloc(&d_efield, target_size*sizeof(double));
+    if(checkcudaerr(errcode) != 0){cout << "Failed allocating e_field" << endl;}
+
 
 #if TESTFLAG
     cout << "Input particles:" << endl;
@@ -364,6 +457,14 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     }
 #endif
 
+    errcode = cudaMemcpy(d_particles, source_particles, source_size*sizeof(double), cudaMemcpyHostToDevice);
+    if(checkcudaerr(errcode) != 0){cout << "Failed copying source particles to device" << endl;}
+
+    errcode = cudaMemcpy(d_targets, target_particles, target_size*sizeof(double), cudaMemcpyHostToDevice);
+    if(checkcudaerr(errcode) != 0){cout << "Failed copying target particles to device" << endl;}
+
+    errcode = cudaMemcpy(d_weights, weights, source_size*sizeof(double), cudaMemcpyHostToDevice);
+    if(checkcudaerr(errcode) != 0){cout << "Failed copying source weights to device" << endl;}
 
 
     panel root;
@@ -412,7 +513,6 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
 
     cout << "Initilizing tree list" << endl;
 
-
     init_tree_list(&root, tree_list, &id, leaf_indicies, &leaf_id);
 
 #if TESTFLAG
@@ -434,6 +534,8 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
 #endif
 
     cout << "Initilized tree list" << endl;
+
+    
 
     int near_interactions[leaf_size*leaf_size];
     int far_interactions[leaf_size*leaf_size];
@@ -480,56 +582,26 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     cout << endl;
 #endif
 
-    // TODO Move initilization/memory transfer of everything except tree items to be before the tree is
-    // constructed (concurrency between data tranfer to GPU and CPU operations)
-
-    // Initilize device vars
-    panel *d_tree_list;
-    double *d_particles;
-    double *d_targets;
-    double *d_weights;
-    double *d_efield;
-    int *d_near_list;
-    int *d_far_list;
-    int *d_leaf_indicies;
-
-    cudaError_t errcode;
-
     errcode = cudaMalloc(&d_tree_list, tree_size*sizeof(panel));
     if(checkcudaerr(errcode) != 0){cout << "Failed allocating tree list" << endl;}
 
-    errcode = cudaMalloc(&d_particles, source_size*sizeof(double));
-    if(checkcudaerr(errcode) !=0){cout << "Failed allocating source particles" << endl;}
-
-    errcode = cudaMalloc(&d_targets, target_size*sizeof(double));
-    if(checkcudaerr(errcode) !=0){cout << "Failed allocating target particles" << endl;}
-
-    errcode = cudaMalloc(&d_weights, source_size*sizeof(double));
-    if(checkcudaerr(errcode) != 0){cout << "Failed allocating source weights" << endl;}
-
-    errcode = cudaMalloc(&d_efield, target_size*sizeof(double));
-    if(checkcudaerr(errcode) != 0){cout << "Failed allocating e_field" << endl;}
     
-    errcode = cudaMalloc(&d_near_list, leaf_size*leaf_size*sizeof(int));
-    if(checkcudaerr(errcode) != 0){cout << "Failed allocating near interaction list" << endl;}
-    
-    errcode = cudaMalloc(&d_far_list, leaf_size*leaf_size*sizeof(int));
-    if(checkcudaerr(errcode) != 0){cout << "Failed allocating far interaction list" << endl;}
-
     errcode = cudaMalloc(&d_leaf_indicies, leaf_size*sizeof(int));
     if(checkcudaerr(errcode) != 0){cout << "Failed allocating leaf indicies" << endl;}
 
     errcode = cudaMemcpy(d_tree_list, tree_list, tree_size*sizeof(panel), cudaMemcpyHostToDevice);
     if(checkcudaerr(errcode) != 0){cout << "Failed copying tree list to device" << endl;}
  
-    errcode = cudaMemcpy(d_particles, source_particles, source_size*sizeof(double), cudaMemcpyHostToDevice);
-    if(checkcudaerr(errcode) != 0){cout << "Failed copying source particles to device" << endl;}
+    
+    errcode = cudaMemcpy(d_leaf_indicies, leaf_indicies, leaf_size*sizeof(int), cudaMemcpyHostToDevice);
+    if(checkcudaerr(errcode) != 0){cout << "Failed copying leaf indicies to device" << endl;}
 
-    errcode = cudaMemcpy(d_targets, target_particles, target_size*sizeof(double), cudaMemcpyHostToDevice);
-    if(checkcudaerr(errcode) != 0){cout << "Failed copying target particles to device" << endl;}
 
-    errcode = cudaMemcpy(d_weights, weights, source_size*sizeof(double), cudaMemcpyHostToDevice);
-    if(checkcudaerr(errcode) != 0){cout << "Failed copying source weights to device" << endl;}
+    errcode = cudaMalloc(&d_near_list, leaf_size*leaf_size*sizeof(int));
+    if(checkcudaerr(errcode) != 0){cout << "Failed allocating near interaction list" << endl;}
+    
+    errcode = cudaMalloc(&d_far_list, leaf_size*leaf_size*sizeof(int));
+    if(checkcudaerr(errcode) != 0){cout << "Failed allocating far interaction list" << endl;}
 
     errcode = cudaMemcpy(d_near_list, near_interactions, leaf_size*leaf_size*sizeof(int), cudaMemcpyHostToDevice);
     if(checkcudaerr(errcode) != 0){cout << "Failed copying near interactions to device" << endl;}
@@ -537,12 +609,10 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     errcode = cudaMemcpy(d_far_list, far_interactions, leaf_size*leaf_size*sizeof(int), cudaMemcpyHostToDevice);
     if(checkcudaerr(errcode) != 0){cout << "Failed copying far interactions to device" << endl;}
 
-    errcode = cudaMemcpy(d_leaf_indicies, leaf_indicies, leaf_size*sizeof(int), cudaMemcpyHostToDevice);
-    if(checkcudaerr(errcode) != 0){cout << "Failed copying leaf indicies to device" << endl;}
-
-    int blocksize = 128;
-    // TODO Should this be tree_size + blocksize + 1 ?
-    int gridlen = (source_size + blocksize - 1) / blocksize;
+    // TODO This might be better as the smallest divisor of 32 larger than PP (might need to be slightly careful with some warp-level primitives though)
+    int blocksize = 32;
+    //int gridlen = (PP*tree_size + blocksize - 1) / blocksize;
+    int gridlen = (blocksize*tree_size + blocksize - 1) / blocksize;
     init_modified_weights<<<gridlen,blocksize>>>(d_tree_list, d_particles, d_weights, source_size, tree_size);
 
     cout << "Initilized modified weights" << endl;
@@ -566,16 +636,11 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     cout << endl;
 #endif
 
-    if (root.left_child){
-        free_tree_list(root.left_child);
-    }
-    if (root.right_child){
-        free_tree_list(root.right_child);
-    }
 
     //Should set this dynamically eventually
     cudaDeviceSetLimit(cudaLimitDevRuntimePendingLaunchCount, 16384);
 
+    // blocksize = 
     gridlen = (leaf_size + blocksize - 1) / blocksize;
     computesum<<<gridlen,blocksize>>>(d_efield, d_tree_list, d_leaf_indicies, d_targets, d_particles, d_weights, d_near_list, d_far_list, leaf_size);
 
@@ -596,6 +661,14 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
         cout << "e[" << k << "] = " << e_field[k] << endl;
     }
 #endif
+
+
+    if (root.left_child){
+        free_tree_list(root.left_child);
+    }
+    if (root.right_child){
+        free_tree_list(root.right_child);
+    }
 
     cudaFree(d_tree_list);
     cudaFree(d_particles);
