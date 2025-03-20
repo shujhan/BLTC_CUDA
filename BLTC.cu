@@ -172,17 +172,13 @@ void free_tree_list(panel *panel){
  *
  */
 __global__ void init_modified_weights(panel *d_tree_list, double *d_particles, double *d_weights, int source_size, int tree_size){
-    int idx = blockIdx.x*blockDim.x + threadIdx.x;
 //    unsigned mask = __ballot_sync(FULL_MASK, threadIdx.x < PP);
-    if (idx >= PP*tree_size){return;}
-//    if (threadIdx.x >= PP){return;}
-    int tree_idx = idx / PP;
-    int cheb_idx = idx - PP*tree_idx;
+    int tree_idx = blockIdx.x;
+    int cheb_idx = threadIdx.x;
+    double sum = 0.0; // Memory only cleared after warp is finished, so unused threads should still have this set (?)
+    if (cheb_idx >= PP || tree_idx >= tree_size){return;}
 
     panel *p = d_tree_list + tree_idx;
-
-    if (threadIdx.x >= PP){double sum = 0.0;}
-    else{
 
     double w1;
     if (cheb_idx == 0 || cheb_idx == (PP-1)) {
@@ -197,33 +193,33 @@ __global__ void init_modified_weights(panel *d_tree_list, double *d_particles, d
     
     double a1; // the clartiy term in paper 
     double modified_weight = 0.0;
-    double sum = 0.0;
+    double y;
+    double cheb_pt = p->s[cheb_idx];
+    int flag;
 
     // set up modified weights 
     // Could unroll this loop and have the second half of a warp do half of these iterations if we are fine with limiting the interpolation degree to be <=14
     // Could also just have a switch to check that (and a few versions of this function with various levels of loop unrolling)
     for (int k = p->members[0]; k <= p->members[1]; k++) {
-        double y = d_particles[k]; // particles in cluster
-        double cheb_pt = p->s[cheb_idx];
-        int flag = -1;
+        y = d_particles[k]; // particles in cluster
+        flag = -1;
         sum = 0.0;
-        //for (int i = 0; i < PP; i++) {
-            if(fabs(y - cheb_pt) <= DBL_MIN) {
-                flag = cheb_idx;
-            }
-            else{
-                a1 = w1 /(y - cheb_pt);
-                sum += a1;
-            }
 
-            // This possibly avoids some thread divergence at the cost of using an extra register
-            // and some extra arithmetic ops
-            // Appears to produce the same result as above, but this hasn't been tested thouroughly
-           //close = fabs(y - p->s[i]) <= DBL_MIN;
-           //flag = i*close - (1-close); // = i if close=1, =-1 if close=0
-           //a1[i] = w1[i] / (y - p->s[i] + close) * (1-close); // =a1[i] if close=0, =0 if close=1
-           //sum += a1[i];
-//        }
+        if(fabs(y - cheb_pt) <= DBL_MIN) {
+            flag = cheb_idx;
+        }
+        else{
+            a1 = w1 /(y - cheb_pt);
+            sum += a1;
+        }
+
+        // This possibly avoids some thread divergence at the cost of using an extra register
+        // and some extra arithmetic ops
+        // Appears to produce the same result as above, but this hasn't been tested thouroughly
+       //close = fabs(y - p->s[i]) <= DBL_MIN;
+       //flag = i*close - (1-close); // = i if close=1, =-1 if close=0
+       //a1[i] = w1[i] / (y - p->s[i] + close) * (1-close); // =a1[i] if close=0, =0 if close=1
+       //sum += a1[i];
         
 
         if (flag > -1) {
@@ -240,14 +236,12 @@ __global__ void init_modified_weights(panel *d_tree_list, double *d_particles, d
         for (int offset = 16; offset>0; offset /= 2){
             sum += __shfl_down_sync(FULL_MASK, sum, offset);
         }
+        sum = __shfl_sync(FULL_MASK, sum, 0);
 
-        double D = 1.0 / sum;
-
-        modified_weight += a1 * D * d_weights[k];
+        modified_weight += a1 * d_weights[k] / sum;
 
     }
     p->modified_weights[threadIdx.x] = modified_weight;
-    }
 }
 
 /* init_interaction_lists
@@ -341,7 +335,7 @@ void init_tree_list(panel *p, panel *tree_list, int *current_id, int *leaf_indic
 }
 
 // This will eventually read L from the interface class
-__device__ double kernel(double x, double y){
+__device__ inline double kernel(double x, double y){
     const double eps = 1e-1;
     double z = (x - y)/L;
     z = z - round(z);
@@ -385,6 +379,13 @@ __global__ void computesum(double *e_field, panel *tree_list, int *leaf_indicies
     int gridlen = (leaf_panel->num_members + blocksize - 1) / blocksize;
     computepanelsum<<<gridlen, blocksize>>>(e_field, leaf_panel, tree_list, target_particles, source_particles, weights, d_near_list, d_far_list, idx, leaf_size);
 
+}
+
+__global__ void re_order(double* e_field, double* ordered_efield, size_t* indicies, int source_size){
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= source_size){return;}
+
+    e_field[indicies[idx]] = ordered_efield[idx];
 }
 
 int checkcudaerr(cudaError_t err){
@@ -640,21 +641,35 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     //Should set this dynamically eventually
     cudaDeviceSetLimit(cudaLimitDevRuntimePendingLaunchCount, 16384);
 
-    // blocksize = 
+    blocksize = 1024;
     gridlen = (leaf_size + blocksize - 1) / blocksize;
     computesum<<<gridlen,blocksize>>>(d_efield, d_tree_list, d_leaf_indicies, d_targets, d_particles, d_weights, d_near_list, d_far_list, leaf_size);
 
-    cout << "Computed BLTC sum" << endl;
+    cudaDeviceSynchronize();
 
-    double* ordered_e_field = (double*)malloc(sizeof(double)*source_size);
-    errcode = cudaMemcpy(ordered_e_field, d_efield, target_size*sizeof(double), cudaMemcpyDeviceToHost);
+//    cout << "Computed BLTC sum" << endl;
+
+    size_t* d_source_indicies;
+    errcode = cudaMalloc(&d_source_indicies, source_size*sizeof(size_t));
+    if(checkcudaerr(errcode) !=0){cout << "Failed allocating source indicies" << endl;}
+    errcode = cudaMemcpy(d_source_indicies, source_indicies, source_size*sizeof(size_t), cudaMemcpyHostToDevice);
+    if(checkcudaerr(errcode) !=0){cout << "Failed to copy source indicies" << endl;}
+    
+    double* d_ordered_e_field;
+    errcode = cudaMalloc(&d_ordered_e_field, source_size*sizeof(double));
+    if(checkcudaerr(errcode) !=0){cout << "Failed allocating ordered e_field" << endl;}
+
+    // some kernel
+    gridlen = (source_size + blocksize - 1) / blocksize;
+    re_order<<<gridlen, blocksize>>>(d_ordered_e_field, d_efield, d_source_indicies, source_size);
+
+    errcode = cudaMemcpy(e_field, d_ordered_e_field, target_size*sizeof(double), cudaMemcpyDeviceToHost);
     if(checkcudaerr(errcode) != 0){cout << "Failed to copy e_field to host" << endl;}
 
     // TODO This can be done more quickly with the GPU
-    for(size_t k=0;k<source_size;k++){
-        e_field[source_indicies[k]] = ordered_e_field[k];
-    }
-    free(source_indicies);
+//    for(size_t k=0;k<source_size;k++){
+//        e_field[source_indicies[k]] = ordered_e_field[k];
+//    }
 
 #if TESTFLAG
     for (size_t k=0;k<source_size;k++){
@@ -675,5 +690,7 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     cudaFree(d_weights);
     cudaFree(d_leaf_indicies);
     cudaFree(d_efield);
+    cudaFree(d_ordered_e_field);
+    cudaFree(d_source_indicies);
 
 }
