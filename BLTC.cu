@@ -25,6 +25,8 @@ __device__ void cdpAssert(cudaError_t code, const char *file, int line, bool abo
     }
 }
 
+// TODO Sort particles during tree contstruction
+// Just need to be sorted within each leaf -- keep a counter for current particle index and seperate array for order
 /* split panel
  *
  * Creates the left and right children of the passed panel p.  If these children are 
@@ -154,13 +156,6 @@ void free_tree_list(panel *panel){
     free(panel);
 }
 
-//TODO This kernel has very low occupancy -- try to optimize
-//Might be able to do some loop unrolling / dynamic parallelism
-//If nothing else, can identify 1 thread per PP loop iteration (should have next to no communication
-//in each case)
-//Currently has very low warp efficiency (lots of thread divergence)
-// - Should launch with PP*tree_size threads, so that each thread gets one panel and one iteration of each PP loop
-//   - Should also keep local variables for several vars (w1[i], p->modified_weights[k], etc) to reduce global memory acesses
 
 /* init_modified_weights
  *
@@ -343,6 +338,51 @@ __device__ inline double kernel(double x, double y){
     //return x*y;
 }
 
+__global__ void computepanelsum_far(double *e_field, panel *leaf_panel, panel *tree_list, double *target_particles, double *source_particles, int *d_far_list, int leaf_id, int leaf_size){
+
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= leaf_panel->num_members * leaf_panel->far_size){return;}
+
+    int member_idx = leaf_panel->members[0] + idx / leaf_panel->far_size;
+    int far_idx = idx % leaf_panel->far_size;
+
+    double px = source_particles[member_idx];
+    double local_e = 0.0;
+    panel far_panel = tree_list[d_far_list[leaf_size * leaf_id + far_idx]];
+    for (size_t j=0;j<PP;j++){
+        local_e += kernel(px, far_panel.s[j]) * far_panel.modified_weights[j];
+    }
+
+    // Could make a bit faster using the same __shfl_reduce_sum from init_modified_weights
+    atomicAdd(e_field + member_idx, local_e);
+
+}
+
+__global__ void computepanelsum_near(double *e_field, panel *leaf_panel, panel *tree_list, double *target_particles, double *source_particles, double *weights, int *d_near_list, int leaf_id, int leaf_size){
+
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= leaf_panel->num_members * leaf_panel->near_size){return;}
+
+    int member_idx = leaf_panel->members[0] + idx / leaf_panel->near_size;
+    int near_idx = idx % leaf_panel->near_size;
+
+    double px = source_particles[member_idx];
+    double local_e = 0.0;
+    panel near_panel = tree_list[d_near_list[leaf_size * leaf_id + near_idx]];
+
+
+    for (size_t j=near_panel.members[0];j<=near_panel.members[1];j++){
+        // TODO try inlining kernel
+        local_e += kernel(px, source_particles[j]) * weights[j];
+    }
+
+    // This can be sped up, either using shared memory or writing directly to a temporary array that we can
+    // later reduce over
+    atomicAdd(e_field + member_idx, local_e);
+}
+
+
+// TODO Might be worth breaking out two seperate kernels, one for near interactions and one for far interactions
 __global__ void computepanelsum(double *e_field, panel *leaf_panel, panel *tree_list, double *target_particles, double *source_particles, double *weights, int *d_near_list, int *d_far_list, int leaf_id, int leaf_size){
     int idx = blockIdx.x*blockDim.x + threadIdx.x;
 
@@ -351,16 +391,21 @@ __global__ void computepanelsum(double *e_field, panel *leaf_panel, panel *tree_
     int member_idx = leaf_panel->members[0]+idx;
     double px = source_particles[member_idx];
     double local_e = 0.0;
+    panel far_panel;
+    panel near_panel;
 
+    // Should be able to further parallelize these loops
+    // Double loop over leafs (outer) and far panels (inner) should be done outside kernel
     for(size_t k=0;k<leaf_panel->far_size;k++){
-            panel far_panel = tree_list[d_far_list[leaf_size * leaf_id + k]];
+            far_panel = tree_list[d_far_list[leaf_size * leaf_id + k]];
             for (size_t j=0;j<PP;j++){
                 local_e += kernel(px, far_panel.s[j]) * far_panel.modified_weights[j];
             }
        } 
 
+    // Same comment for this loop
     for(size_t k=0;k<leaf_panel->near_size;k++){
-        panel near_panel = tree_list[d_near_list[leaf_size * leaf_id + k]];
+        near_panel = tree_list[d_near_list[leaf_size * leaf_id + k]];
         for (size_t j=near_panel.members[0];j<=near_panel.members[1];j++){
             local_e += kernel(px, source_particles[j]) * weights[j];
         }
@@ -437,6 +482,8 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
 
     errcode = cudaMalloc(&d_efield, target_size*sizeof(double));
     if(checkcudaerr(errcode) != 0){cout << "Failed allocating e_field" << endl;}
+    errcode = cudaMemset(d_efield, 0.0, target_size*sizeof(double));
+    if(checkcudaerr(errcode) != 0){cout << "Failed initilizing e_field to 0" << endl;}
 
 
 #if TESTFLAG
@@ -445,12 +492,14 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
         cout << "x[" << k << "] = " << source_particles[k] << endl;
     }
 #endif
+
     // TODO Need to sort particles and also re-sort the corresponding weights
     size_t* source_indicies = (size_t*)malloc(sizeof(size_t)*source_size);
     for(size_t k=0;k<source_size;k++){
         source_indicies[k] = k;
     }
     quicksort(source_particles, (int)source_size, source_indicies);
+
 #if TESTFLAG
     cout << endl << "Sorted particles:" << endl << endl;;
     for(size_t k=0;k<source_size;k++){
@@ -468,6 +517,7 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     if(checkcudaerr(errcode) != 0){cout << "Failed copying source weights to device" << endl;}
 
 
+    // Set up root panel
     panel root;
     double xmin = source_particles[0];
     double xmax = source_particles[0];
@@ -477,11 +527,6 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
         if(source_particles[k] < xmin){ xmin = source_particles[k]; }
         if(source_particles[k] > xmax){ xmax = source_particles[k]; }
     }
-    //root.xinterval[0] = xmin - 0.001;
-    //root.xinterval[1] = xmax + 0.001;
-    //root.xc = (xmax + xmin) / 2;
-    //root.xinterval[0] = 0.0;
-    //root.xinterval[1] = L;
     root.xinterval[0] = xmin-0.001;
     root.xinterval[1] = xmax+0.001;
     root.xc = (root.xinterval[0] + root.xinterval[1])/2;
@@ -499,6 +544,7 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
         split_panel(&root, source_particles, &tree_size, &leaf_size);
     }
     else{ 
+        // TODO Should just abort to direct sum here
         root.left_child = NULL;
         root.right_child = NULL;
         leaf_size=1;  
@@ -535,8 +581,6 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
 #endif
 
     cout << "Initilized tree list" << endl;
-
-    
 
     int near_interactions[leaf_size*leaf_size];
     int far_interactions[leaf_size*leaf_size];
@@ -639,15 +683,50 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
 
 
     //Should set this dynamically eventually
-    cudaDeviceSetLimit(cudaLimitDevRuntimePendingLaunchCount, 16384);
-
-    blocksize = 1024;
-    gridlen = (leaf_size + blocksize - 1) / blocksize;
-    computesum<<<gridlen,blocksize>>>(d_efield, d_tree_list, d_leaf_indicies, d_targets, d_particles, d_weights, d_near_list, d_far_list, leaf_size);
+//    cudaDeviceSetLimit(cudaLimitDevRuntimePendingLaunchCount, 16384);
 
     cudaDeviceSynchronize();
 
-//    cout << "Computed BLTC sum" << endl;
+    // Might be some tuning to be done here
+    blocksize = 128;
+    size_t leaf_particles;
+    
+    // This will run what is essentially computesum, but using cuda streams instead of dynamic parallelism
+    // May or may not have the potential to be as efficient (or more efficient)
+    // Easier to profile computepanelsum this way
+    //cudaStream_t streams[leaf_size];
+    //for (int i=0; i<leaf_size;i++){
+    cudaStream_t streams1[leaf_size];
+    cudaStream_t streams2[leaf_size];
+    for (int i=0; i<leaf_size; i++){
+        cudaStreamCreate(&streams1[i]);
+        leaf_particles = tree_list[leaf_indicies[i]].num_members;
+
+        gridlen = (leaf_particles * tree_list[leaf_indicies[i]].near_size + blocksize - 1) / blocksize;
+        computepanelsum_near<<<gridlen,blocksize, 0, streams1[i]>>>(d_efield, d_tree_list + leaf_indicies[i], d_tree_list, d_targets, d_particles, d_weights, d_near_list, i, leaf_size);
+
+        //gridlen = (leaf_particles * tree_list[leaf_indicies[i]].far_size + blocksize - 1) / blocksize;
+//        computepanelsum<<<gridlen,blocksize, 0, streams[i]>>>(d_efield, d_tree_list + leaf_indicies[i], d_tree_list, d_targets, d_particles, d_weights, d_near_list, d_far_list, i, leaf_size);
+        //computepanelsum_far<<<gridlen,blocksize, 0, streams1[i]>>>(d_efield, d_tree_list + leaf_indicies[i], d_tree_list, d_targets, d_particles, d_far_list, i, leaf_size);
+    }
+
+    for (int i=0; i<leaf_size; i++){
+        cudaStreamCreate(&streams2[i]);
+        leaf_particles = tree_list[leaf_indicies[i]].num_members;
+        gridlen = (leaf_particles * tree_list[leaf_indicies[i]].far_size + blocksize - 1) / blocksize;
+        computepanelsum_far<<<gridlen,blocksize, 0, streams2[i]>>>(d_efield, d_tree_list + leaf_indicies[i], d_tree_list, d_targets, d_particles, d_far_list, i, leaf_size);
+    }
+
+    // Not sure if the dynamic parallelism is launching kernels concurrently or not
+//    computesum<<<gridlen,blocksize>>>(d_efield, d_tree_list, d_leaf_indicies, d_targets, d_particles, d_weights, d_near_list, d_far_list, leaf_size);
+
+    cudaDeviceSynchronize();
+    for (int i=0; i<leaf_size;i++){
+        cudaStreamDestroy(streams1[i]);
+        cudaStreamDestroy(streams2[i]);
+    }
+
+    cout << "Computed BLTC sum" << endl;
 
     size_t* d_source_indicies;
     errcode = cudaMalloc(&d_source_indicies, source_size*sizeof(size_t));
@@ -659,17 +738,12 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     errcode = cudaMalloc(&d_ordered_e_field, source_size*sizeof(double));
     if(checkcudaerr(errcode) !=0){cout << "Failed allocating ordered e_field" << endl;}
 
-    // some kernel
     gridlen = (source_size + blocksize - 1) / blocksize;
     re_order<<<gridlen, blocksize>>>(d_ordered_e_field, d_efield, d_source_indicies, source_size);
 
     errcode = cudaMemcpy(e_field, d_ordered_e_field, target_size*sizeof(double), cudaMemcpyDeviceToHost);
     if(checkcudaerr(errcode) != 0){cout << "Failed to copy e_field to host" << endl;}
 
-    // TODO This can be done more quickly with the GPU
-//    for(size_t k=0;k<source_size;k++){
-//        e_field[source_indicies[k]] = ordered_e_field[k];
-//    }
 
 #if TESTFLAG
     for (size_t k=0;k<source_size;k++){
