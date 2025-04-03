@@ -1,10 +1,10 @@
 a.out: BLTC.o directsum.o quicksort.o main.o
 	@echo "Linking outputs ..."
-	nvcc -arch=native -rdc=true BLTC.o directsum.o quicksort.o main.o -lcudadevrt
+	nvcc -arch=native BLTC.o directsum.o quicksort.o main.o
 
 BLTC.o: BLTC.cu
 	@echo "Building BLTC ..."
-	nvcc -arch=native -rdc=true -dc BLTC.cu -lcudadevrt
+	nvcc -arch=native --default-stream per-thread -dc BLTC.cu
 
 directsum.o: directsum.cu
 	@echo "Building directsum ..."
