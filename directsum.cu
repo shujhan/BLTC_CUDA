@@ -1,4 +1,3 @@
-#include "quicksort.h"
 #include<iostream>
 #include<cmath>
 using std::cout;
@@ -70,6 +69,7 @@ __global__ void direct_e_sum_dynamic(double *d_efield, double *d_particles, doub
 //////////////////////////////////
 // Non-dynamic parallel version //
 //////////////////////////////////
+
 __global__ void direct_e_sum(double *d_efield, double *d_particles, double *d_target, double *d_weights,
         const size_t source_size, size_t target_size){
 
@@ -88,6 +88,42 @@ __global__ void direct_e_sum(double *d_efield, double *d_particles, double *d_ta
    d_efield[idx] = local_e;
 }
 
+/*
+__global__ void direct_e_sum(double *d_efield, double *d_particles, double *d_target, double *d_weights,
+        const size_t source_size, size_t target_size){
+
+   const int idx = blockIdx.x*blockDim.x + threadIdx.x;
+
+   double local_e = 0.0;
+
+   const double target_loc = idx < target_size ? d_target[idx] : 0.0;
+
+   __shared__ double source_points[128];
+   __shared__ double weights[128];
+
+   for(size_t j=0;j<source_size/128;j++){
+       source_points[threadIdx.x] = d_particles[128*j + threadIdx.x];
+       weights[threadIdx.x] = d_weights[128*j + threadIdx.x];
+       __syncthreads();
+
+       if (idx < target_size){
+           for (size_t k=0; k<128;k++){
+               local_e += kernelp(target_loc, source_points[k]) * weights[k];
+               //local_e += kernelp(target_loc, source_points[k]) * d_weights[k];
+           }
+       }
+   }
+
+   if (idx < target_size){
+
+       //for(size_t j=source_size/128;j<source_size;j++){
+       //    local_e += kernelp(target_loc, source_points[j]) * weights[j];
+       //}
+
+       d_efield[idx] = local_e;
+   }
+}
+*/
 // No significant speedup over non-nested
 __global__ void direct_e_sum_nested(double *d_efield, double *d_particles, double *d_target, double *d_weights,
         const size_t source_size, size_t target_size){

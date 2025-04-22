@@ -263,11 +263,12 @@ __global__ void init_modified_weights(panel *d_tree_list, double *d_particles, d
  *       and far_index set to 0.
  *
  */
-void init_interaction_lists(panel* leaf, panel* source_panel, int *near_ids, int *far_ids, int *near_index, int *far_index, int leaf_id, int leaf_size, double period){
+void init_interaction_lists(panel* leaf, panel* source_panel, int *near_ids, int *far_ids, int *near_index, int *far_index, int leaf_id, int leaf_size, double period, int *total_nears){
     // Check if source panel is a leaf
     if (!source_panel->left_child && !source_panel->right_child){
         near_ids[leaf_id*leaf_size + *near_index] = source_panel->id;
         *near_index += 1;
+        *total_nears += 1;
         leaf->near_size += 1;
     }
     else{
@@ -294,10 +295,10 @@ void init_interaction_lists(panel* leaf, panel* source_panel, int *near_ids, int
         // If not a far interaction, recursivley check source_panel's children
         else{
             if(source_panel->left_child){
-                init_interaction_lists(leaf, source_panel->left_child, near_ids, far_ids, near_index, far_index, leaf_id, leaf_size, period);
+                init_interaction_lists(leaf, source_panel->left_child, near_ids, far_ids, near_index, far_index, leaf_id, leaf_size, period, total_nears);
             }
             if(source_panel->right_child){
-                init_interaction_lists(leaf, source_panel->right_child, near_ids, far_ids, near_index, far_index, leaf_id, leaf_size, period);
+                init_interaction_lists(leaf, source_panel->right_child, near_ids, far_ids, near_index, far_index, leaf_id, leaf_size, period, total_nears);
             }
         }
     }
@@ -365,6 +366,11 @@ __global__ void computepanelsum_far(double *e_field, panel *leaf_panel, panel *t
 
 }
 
+// TODO This might be a bit faster if we use a 2D grid to get memberidx and near_idx instead of flat indexing
+// Can we split this kernel up even further?  Paralleize the inner loop as well?  Not sure that would be better.
+// Might entail tracking the number of particles we have direct interactions with when constructing the interaction list
+// (shouldn't be a big deal)
+
 __global__ void computepanelsum_near(double *e_field, panel *leaf_panel, panel *tree_list, double *target_particles, double *source_particles, double *weights, int *d_near_list, int leaf_id, int leaf_size){
 
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -388,6 +394,59 @@ __global__ void computepanelsum_near(double *e_field, panel *leaf_panel, panel *
     atomicAdd(e_field + member_idx, local_e);
 }
 
+
+// TODO might be faster to have each thread handle a couple interactions instead of just one for memory reasons
+/*
+__global__ void computepanelsum_near(double *e_field, panel *leaf_panel, size_t left_mem, size_t right_mem, double *target_particles, double *source_particles, double *weights, int leaf_size){
+
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int num_interactions = right_mem - left_mem + 1;
+    if (idx >= leaf_panel->num_members * num_interactions){return;}
+
+    int member_idx = leaf_panel->members[0] + idx / num_interactions;
+    int near_idx = idx % num_interactions;
+
+    double px = source_particles[member_idx];
+    double local_e = kernel(px, source_particles[left_mem + near_idx]) * weights[left_mem + near_idx];
+
+    atomicAdd(e_field + member_idx, local_e);
+
+}
+*/
+/*
+__global__ void computepanelsum_near(double *e_field, panel *leaf_panel, size_t left_mem, size_t right_mem, double *target_particles, double *source_particles, double *weights, int leaf_size){
+
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int num_interactions = (right_mem - left_mem + 1) / 16;
+    if (idx >= leaf_panel->num_members * num_interactions){return;}
+
+    int member_idx = leaf_panel->members[0] + idx / num_interactions;
+    int near_idx = 16*(idx % num_interactions);
+
+    double px = source_particles[member_idx];
+    double local_e = kernel(px, source_particles[left_mem + near_idx]) * weights[left_mem + near_idx];
+    local_e += kernel(px, source_particles[left_mem + near_idx + 1]) * weights[left_mem + near_idx + 1];
+    local_e += kernel(px, source_particles[left_mem + near_idx + 2]) * weights[left_mem + near_idx + 2];
+    local_e += kernel(px, source_particles[left_mem + near_idx + 3]) * weights[left_mem + near_idx + 3];
+    local_e += kernel(px, source_particles[left_mem + near_idx + 4]) * weights[left_mem + near_idx + 4];
+    local_e += kernel(px, source_particles[left_mem + near_idx + 5]) * weights[left_mem + near_idx + 5];
+    local_e += kernel(px, source_particles[left_mem + near_idx + 6]) * weights[left_mem + near_idx + 6];
+    local_e += kernel(px, source_particles[left_mem + near_idx + 7]) * weights[left_mem + near_idx + 7];
+    local_e += kernel(px, source_particles[left_mem + near_idx + 8]) * weights[left_mem + near_idx + 8];
+    local_e += kernel(px, source_particles[left_mem + near_idx + 9]) * weights[left_mem + near_idx + 9];
+    local_e += kernel(px, source_particles[left_mem + near_idx + 10]) * weights[left_mem + near_idx + 10];
+    local_e += kernel(px, source_particles[left_mem + near_idx + 11]) * weights[left_mem + near_idx + 11];
+    local_e += kernel(px, source_particles[left_mem + near_idx + 12]) * weights[left_mem + near_idx + 12];
+    local_e += kernel(px, source_particles[left_mem + near_idx + 13]) * weights[left_mem + near_idx + 13];
+    local_e += kernel(px, source_particles[left_mem + near_idx + 14]) * weights[left_mem + near_idx + 14];
+    local_e += kernel(px, source_particles[left_mem + near_idx + 15]) * weights[left_mem + near_idx + 15];
+
+    atomicAdd(e_field + member_idx, local_e);
+
+}
+*/
+
+
 // TODO Might be worth breaking out two seperate kernels, one for near interactions and one for far interactions
 __global__ void computepanelsum(double *e_field, panel *leaf_panel, panel *tree_list, double *target_particles, double *source_particles, double *weights, int *d_near_list, int *d_far_list, int leaf_id, int leaf_size){
     const int idx = blockIdx.x*blockDim.x + threadIdx.x;
@@ -398,8 +457,10 @@ __global__ void computepanelsum(double *e_field, panel *leaf_panel, panel *tree_
     const double px = source_particles[member_idx];
     double local_e = 0.0;
     double z;
+    double norm_epssq = sqrt(1.0 + 4.0 * epsoverLsq);
     panel far_panel;
     panel near_panel;
+    //size_t near_members[2];
 
     // This is running for a single panel, so the far panels and near panels are the same for every thread
     // So, should put relevant source particles, weights, modified weights, and chebyshev points in shared memory
@@ -413,18 +474,21 @@ __global__ void computepanelsum(double *e_field, panel *leaf_panel, panel *tree_
 //                local_e += kernel(px, far_panel.s[j]) * far_panel.modified_weights[j];
                 z = (px - far_panel.s[j])*Linv;
                 z = z - round(z);
-                local_e += (0.5 * z * sqrt(1.0 + 4.0 * epsoverLsq) * rsqrt( z*z + epsoverLsq  ) - z) * far_panel.modified_weights[j];
+                local_e += (0.5 * z * norm_epssq * rsqrt( z*z + epsoverLsq  ) - z) * far_panel.modified_weights[j];
             }
        } 
 
     // Same comment for this loop
     for(size_t k=0;k<leaf_panel->near_size;k++){
         near_panel = tree_list[d_near_list[leaf_size * leaf_id + k]];
+        // Might be slightly faster to not load entire panel into memory
+        //near_members[0] = tree_list[d_near_list[leaf_size * leaf_id + k]].members[0];
+        //near_members[1] = tree_list[d_near_list[leaf_size * leaf_id + k]].members[1];
         for (size_t j=near_panel.members[0];j<=near_panel.members[1];j++){
             // local_e += kernel(px, source_particles[j]) * weights[j];
             z = (px - source_particles[j])*Linv;
             z = z - round(z);
-            local_e += (0.5 * z * sqrt(1.0 + 4.0 * epsoverLsq) * rsqrt( z*z + epsoverLsq  ) - z) * weights[j];
+            local_e += (0.5 * z * norm_epssq * rsqrt( z*z + epsoverLsq  ) - z) * weights[j];
         }
     }
     e_field[member_idx] = local_e;
@@ -622,10 +686,11 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
         far_interactions[k] = -1;
     }
 
+    int total_nears = 0;
     for(int k=0;k<leaf_size;k++){
         int near_index = 0;
         int far_index = 0;
-        init_interaction_lists(tree_list+leaf_indicies[k], &root, near_interactions, far_interactions, &near_index, &far_index, k, leaf_size, L); 
+        init_interaction_lists(tree_list+leaf_indicies[k], &root, near_interactions, far_interactions, &near_index, &far_index, k, leaf_size, L, &total_nears); 
     }
 
     cout << "Initilized interaction lists" << endl;
@@ -722,43 +787,65 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
 
     // Might be some tuning to be done here
     blocksize = 256;
-    size_t leaf_particles;
+    //size_t leaf_particles;
     
     // This will run what is essentially computesum, but using cuda streams instead of dynamic parallelism
     // May or may not have the potential to be as efficient (or more efficient)
     // Easier to profile computepanelsum this way
-    cudaStream_t streams[leaf_size];
+    cudaStream_t streams_far[leaf_size];
+    cudaStream_t streams_near[leaf_size*total_nears];
     for (int i=0; i<leaf_size;i++){
-//    cudaStream_t streams1[leaf_size];
-//    cudaStream_t streams2[leaf_size];
-//    for (int i=0; i<leaf_size; i++){
-        cudaStreamCreate(&streams[i]);
-        leaf_particles = tree_list[leaf_indicies[i]].num_members;
-        gridlen = (leaf_particles + blocksize - 1) / blocksize; 
+        cudaStreamCreate(&streams_far[i]);
 
-//        gridlen = (leaf_particles * tree_list[leaf_indicies[i]].near_size + blocksize - 1) / blocksize;
-//        computepanelsum_near<<<gridlen,blocksize, 0, streams1[i]>>>(d_efield, d_tree_list + leaf_indicies[i], d_tree_list, d_targets, d_particles, d_weights, d_near_list, i, leaf_size);
-
-//        gridlen = (leaf_particles * tree_list[leaf_indicies[i]].far_size + blocksize - 1) / blocksize;
-        computepanelsum<<<gridlen,blocksize, 0, streams[i]>>>(d_efield, d_tree_list + leaf_indicies[i], d_tree_list, d_targets, d_particles, d_weights, d_near_list, d_far_list, i, leaf_size);
-        //computepanelsum_far<<<gridlen,blocksize, 0, streams1[i]>>>(d_efield, d_tree_list + leaf_indicies[i], d_tree_list, d_targets, d_particles, d_far_list, i, leaf_size);
+        gridlen = (tree_list[leaf_indicies[i]].num_members * tree_list[leaf_indicies[i]].far_size + blocksize - 1) / blocksize;
+        computepanelsum_far<<<gridlen,blocksize, 0, streams_far[i]>>>(d_efield, d_tree_list + leaf_indicies[i], d_tree_list, d_targets, d_particles, d_far_list, i, leaf_size);
     }
 
-//    for (int i=0; i<leaf_size; i++){
-//        cudaStreamCreate(&streams2[i]);
-//        leaf_particles = tree_list[leaf_indicies[i]].num_members;
-//        gridlen = (leaf_particles * tree_list[leaf_indicies[i]].far_size + blocksize - 1) / blocksize;
-//        computepanelsum_far<<<gridlen,blocksize, 0, streams2[i]>>>(d_efield, d_tree_list + leaf_indicies[i], d_tree_list, d_targets, d_particles, d_far_list, i, leaf_size);
-  //  }
+    cout << "Queued far interactions" << endl;
 
-    // Not sure if the dynamic parallelism is launching kernels concurrently or not
-//    computesum<<<gridlen,blocksize>>>(d_efield, d_tree_list, d_leaf_indicies, d_targets, d_particles, d_weights, d_near_list, d_far_list, leaf_size);
+    for (int i=0; i<leaf_size;i++){
+            cudaStreamCreate(&streams_near[i]);
+
+            gridlen = (tree_list[leaf_indicies[i]].num_members * tree_list[leaf_indicies[i]].near_size + blocksize - 1) / blocksize;
+            computepanelsum_near<<<gridlen,blocksize, 0, streams_near[i]>>>(d_efield, d_tree_list + leaf_indicies[i], d_tree_list, d_targets, d_particles, d_weights, d_near_list, i, leaf_size);
+        }
+
+/*
+    int current_idx = 0;
+    for(int i=0; i<leaf_size;i++){
+        int leaf_particles = tree_list[leaf_indicies[i]].near_size;
+        cudaStreamCreate(&streams_near[current_idx]);
+        for (int j=0; j<leaf_particles; j++){
+
+            int near_id = near_interactions[i*leaf_size + j];
+            size_t left_mem = tree_list[near_id].members[0];
+            size_t right_mem = tree_list[near_id].members[1];
+
+            gridlen = (tree_list[leaf_indicies[i]].num_members * (right_mem - left_mem + 1)/16 + blocksize - 1) / blocksize; 
+
+            computepanelsum_near<<<gridlen,blocksize, 0, streams_near[current_idx]>>>(d_efield, d_tree_list + leaf_indicies[i], left_mem, right_mem, d_targets, d_particles, d_weights, leaf_size);
+
+        }
+        current_idx += 1;
+    }
+  */  
+
+    cout << "Queued near interactions" << endl;
+
+        //computepanelsum<<<gridlen,blocksize, 0, streams[i]>>>(d_efield, d_tree_list + leaf_indicies[i], d_tree_list, d_targets, d_particles, d_weights, d_near_list, d_far_list, i, leaf_size);
 
     cudaDeviceSynchronize();
     for (int i=0; i<leaf_size;i++){
     //    cudaStreamDestroy(streams1[i]);
      //   cudaStreamDestroy(streams2[i]);
-     cudaStreamDestroy(streams[i]);
+     cudaStreamDestroy(streams_far[i]);
+    }
+
+    cout << "Destroyed far streams" << endl;
+
+    // This segfaults, but works if we use current_idx instead
+    for (int i=0; i<current_idx; i++){
+        cudaStreamDestroy(streams_near[i]);
     }
 
     cout << "Computed BLTC sum" << endl;
