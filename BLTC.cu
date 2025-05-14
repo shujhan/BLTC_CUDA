@@ -14,7 +14,7 @@ const double Linv = 1.0/L; // multiplying by Linv in kernel is much faster than 
 const double eps = 1e-1;
 const double epsoverLsq = eps*eps*Linv*Linv;
 
-#define TESTFLAG 0 
+#define TESTFLAG 1 
 
 #define FULL_MASK 0xffffffff
 
@@ -370,7 +370,7 @@ __global__ void computepanelsum_far(double *e_field, panel *leaf_panel, panel *t
 // Can we split this kernel up even further?  Paralleize the inner loop as well?  Not sure that would be better.
 // Might entail tracking the number of particles we have direct interactions with when constructing the interaction list
 // (shouldn't be a big deal)
-
+/*
 __global__ void computepanelsum_near(double *e_field, panel *leaf_panel, panel *tree_list, double *target_particles, double *source_particles, double *weights, int *d_near_list, int leaf_id, int leaf_size){
 
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -393,7 +393,7 @@ __global__ void computepanelsum_near(double *e_field, panel *leaf_panel, panel *
     // later reduce over
     atomicAdd(e_field + member_idx, local_e);
 }
-
+*/
 
 // TODO might be faster to have each thread handle a couple interactions instead of just one for memory reasons
 /*
@@ -410,6 +410,166 @@ __global__ void computepanelsum_near(double *e_field, panel *leaf_panel, size_t 
     double local_e = kernel(px, source_particles[left_mem + near_idx]) * weights[left_mem + near_idx];
 
     atomicAdd(e_field + member_idx, local_e);
+
+}
+*/
+
+/* 5/13/25
+__global__ void computepanelsum_near(double *e_field, panel* tree_list, int* near_interactions, double *target_particles, double *source_particles, double *weights, int leaf_size, int* leaf_indicies){
+
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // Might be better to swap these for memory acess patterns
+    int panel_flat_id = idx % (leaf_size*leaf_size);
+    int leaf_particle_id = idx / (leaf_size*leaf_size);
+
+
+    int leaf_id = panel_flat_id % leaf_size;
+    int source_id = panel_flat_id / leaf_size;
+
+    int source_panel_id = near_interactions[leaf_id * leaf_size + source_id];
+    if (source_panel_id == -1){return;}
+
+    panel leaf = tree_list[leaf_indicies[leaf_id]];
+    panel source = tree_list[source_panel_id];
+
+    if(leaf_particle_id >= leaf.num_members){return;}
+
+    double target_particle = target_particles[leaf.members[0] + leaf_particle_id];
+    double source_particle;
+    double local_e = 0.0;
+
+    for(size_t i=0;i<source.num_members;i++){
+        source_particle = source_particles[source.members[0] + i];
+        local_e += kernel(target_particle, source_particle) * weights[source.members[0] + i];
+    }
+
+    atomicAdd(e_field + leaf.members[0] + leaf_particle_id, local_e);
+    
+}
+*/
+
+// Rather than indexing with one index for a leaf and one index for a source panel, have a single index representing
+// a leaf-source pair.  We can count the total number of pairs needed, and effectivley give each an id from which the
+// leaf and source seperatley can be recovered.
+// Implementation-wise, it might be easiest to create a tuple structure and then just make an array of tuples 
+// of (leaf_id, near_id) pairs which can be indexed into
+// We could even use 3-tuples to specify (leaf_id, near_id, number of interactions) or 4-tuples for
+// (leaf_id, near_id, num particles in leaf, num particles in source) to get an easier count of how many threads are needed
+// One thread dimension indexes the tuple array (and the leaf-source pair by proxy), the other dimension is a flattened index
+// for the leaf particle index and source particle index
+
+__global__ void computepanelsum_near(double *e_field, double *target_particles, double *source_particles, double *weights, tuple4* near_data, int total_nears){
+
+    //int particle_flat_id = blockIdx.x * blockDim.x + threadIdx.x;
+    int interaction_id = blockIdx.z * blockDim.z + threadIdx.z;
+    if (interaction_id >= total_nears) {return;}
+
+    tuple4 interaction = near_data[interaction_id];
+    //int target_id = particle_flat_id % N0;
+    //int source_id = particle_flat_id / N0;
+    int target_id = blockIdx.x * blockDim.x + threadIdx.x;
+    int source_id = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if(target_id >= interaction.target_size){return;}
+    if(source_id >= interaction.source_size){return;}
+
+    double target_x = target_particles[interaction.target_mem_0 + target_id];
+    double source_x = source_particles[interaction.source_mem_0 + source_id];
+
+    double local_e = kernel(target_x, source_x) * weights[interaction.source_mem_0 + source_id];
+
+    atomicAdd(e_field + interaction.target_mem_0 + target_id, local_e);
+        
+}
+
+
+/* 5/14/25
+__global__ void computepanelsum_near(double *e_field, panel* tree_list, int* near_interactions, double *target_particles, double *source_particles, double *weights, int leaf_size, int* leaf_indicies, tuple6* near_data){
+
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    int particle_flat_id = idx % N02;
+    int interaction_id = idx / N02;
+
+    tuple6 interaction = near_data[interaction_id];
+    int target_id = particle_flat_id % N0;
+    int source_id = particle_flat_id / N0;
+
+    if(target_id >= interaction.target_size){return;}
+    if(source_id >= interaction.source_size){return;}
+
+    double target_x = target_particles[interaction.target_mem_0 + target_id];
+    double source_x = source_particles[interaction.source_mem_0 + source_id];
+
+    double local_e = kernel(target_x, source_x) * weights[interaction.source_mem_0 + source_id];
+
+    atomicAdd(e_field + interaction.target_mem_0 + target_id, local_e);
+        
+}
+*/
+
+
+
+/* 5/13/25
+__global__ void computepanelsum_near(double *e_field, panel* tree_list, int* near_interactions, double *target_particles, double *source_particles, double *weights, int leaf_size, int* leaf_indicies){
+
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // Might be better to swap these for memory acess patterns
+    int panel_flat_id = idx % (leaf_size*leaf_size);
+    int interaction_flat_id = idx / (leaf_size*leaf_size);
+
+    int leaf_id = panel_flat_id % leaf_size;
+    int source_id = panel_flat_id / leaf_size;
+
+    int source_panel_id = near_interactions[leaf_id * leaf_size + source_id];
+    if (source_panel_id == -1){return;}
+
+    int leaf_particle_id = interaction_flat_id % (N0*N0);
+    int source_particle_id = interaction_flat_id / (N0*N0);
+
+    panel leaf = tree_list[leaf_indicies[leaf_id]];
+    panel source = tree_list[source_panel_id];
+
+    if(leaf_particle_id >= leaf.num_members){return;}
+    if(source_particle_id >= source.num_members){return;}
+
+    double target_particle = target_particles[leaf.members[0] + leaf_particle_id];
+    double source_particle = source_particles[source.members[0] + source_particle_id];
+    double local_e = kernel(target_particle, source_particle) * weights[source.members[0] + source_particle_id];
+
+    atomicAdd(e_field + leaf.members[0] + leaf_particle_id, local_e);
+    
+}
+*/
+/*
+__global__ void computepanelsum_near(double *e_field, panel* tree_list, int* near_interactions, double *target_particles, double *source_particles, double *weights, int leaf_size, int* leaf_indicies){
+
+    int leaf_id = blockIdx.x * blockDim.x + threadIdx.x;
+    int target_id = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (leaf_id >= leaf_size) {return;}
+
+    double local_e = 0.0;
+
+    panel leaf_panel = tree_list[leaf_indicies[leaf_id]];
+
+    if (target_id >= leaf_panel.num_members) {return;}
+
+    double target_particle = target_particles[leaf_panel.members[0] + target_id];
+
+    for (size_t i=0;i<leaf_panel.near_size;i++){
+        panel near_panel = tree_list[near_interactions[leaf_id*leaf_size + i]];
+        for (size_t j=0;j<near_panel.num_members;j++){
+            double source_particle = source_particles[near_panel.members[0] + j];
+            
+            local_e += kernel(target_particle, source_particle) * weights[near_panel.members[0] + j];
+        }
+    }
+
+    e_field[leaf_panel.members[0] + target_id] = local_e;
+    //atomicAdd(e_field + leaf_panel.members[0] + target_id, local_e);
 
 }
 */
@@ -793,7 +953,6 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     // May or may not have the potential to be as efficient (or more efficient)
     // Easier to profile computepanelsum this way
     cudaStream_t streams_far[leaf_size];
-    cudaStream_t streams_near[leaf_size*total_nears];
     for (int i=0; i<leaf_size;i++){
         cudaStreamCreate(&streams_far[i]);
 
@@ -803,14 +962,16 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
 
     cout << "Queued far interactions" << endl;
 
+/*
     for (int i=0; i<leaf_size;i++){
             cudaStreamCreate(&streams_near[i]);
 
             gridlen = (tree_list[leaf_indicies[i]].num_members * tree_list[leaf_indicies[i]].near_size + blocksize - 1) / blocksize;
             computepanelsum_near<<<gridlen,blocksize, 0, streams_near[i]>>>(d_efield, d_tree_list + leaf_indicies[i], d_tree_list, d_targets, d_particles, d_weights, d_near_list, i, leaf_size);
         }
+*/
 
-/*
+    /*
     int current_idx = 0;
     for(int i=0; i<leaf_size;i++){
         int leaf_particles = tree_list[leaf_indicies[i]].near_size;
@@ -828,7 +989,61 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
         }
         current_idx += 1;
     }
-  */  
+    */
+
+    tuple4 near_data[total_nears];
+    int interaction_id;
+    int running_nears = 0;
+    for(size_t i=0;i<leaf_size;i++){
+        for(size_t j=0;j<leaf_size;j++){
+            interaction_id = near_interactions[i*leaf_size + j];
+            if (interaction_id == -1){continue;} // break might be better here
+            near_data[running_nears].target_mem_0 = tree_list[leaf_indicies[i]].members[0];
+            near_data[running_nears].source_mem_0 = tree_list[leaf_indicies[j]].members[0];
+            near_data[running_nears].target_size = tree_list[leaf_indicies[i]].num_members;
+            near_data[running_nears].source_size = tree_list[leaf_indicies[j]].num_members;
+            running_nears += 1;
+        }
+    }
+
+    tuple4* d_near_data;
+    errcode = cudaMalloc(&d_near_data, total_nears*sizeof(tuple4));
+    if(checkcudaerr(errcode) != 0){cout << "Failed allocating near data" << endl;}
+
+    errcode = cudaMemcpy(d_near_data, near_data, total_nears*sizeof(tuple4), cudaMemcpyHostToDevice);
+    if(checkcudaerr(errcode) != 0){cout << "Failed copying near data to device" << endl;}
+/* 5/14/25
+    blocksize = 512;
+    gridlen = (total_nears*N0*N0 + blocksize - 1) / blocksize;
+    computepanelsum_near<<<gridlen, blocksize>>>(d_efield, d_tree_list, d_near_list, d_targets, d_particles, d_weights, leaf_size, d_leaf_indicies, d_near_data);
+*/
+
+    int xblocklen = 32;
+    int yblocklen = 32;
+    int zblocklen = 1;
+    dim3 blockdim(xblocklen, yblocklen, zblocklen);
+
+    int xgridlen = N0 / xblocklen;
+    if (N0 % xblocklen != 0){xgridlen += 1;}
+
+    int ygridlen = N0 / yblocklen;
+    if (N0 % yblocklen != 0){ygridlen += 1;}
+
+    int zgridlen = total_nears / zblocklen;
+    if (total_nears % zblocklen != 0){zgridlen += 1;}
+
+    dim3 griddim(xgridlen, ygridlen, zgridlen);
+    computepanelsum_near<<<griddim, blockdim>>>(d_efield, d_particles, d_particles, d_weights, d_near_data, total_nears);
+
+    /*
+    dim3 blockdim(8,128,1);
+    int xgridlen = leaf_size / 8;
+    int ygridlen = N0 / 128;
+    if (leaf_size %8 != 0){xgridlen += 1;}
+    if (N0 %128 != 0){ygridlen += 1;}
+    dim3 griddim(xgridlen, ygridlen, 1);
+    computepanelsum_near<<<griddim, blockdim>>>(d_efield, d_tree_list, d_near_list, d_targets, d_particles, d_weights, leaf_size, d_leaf_indicies);
+*/
 
     cout << "Queued near interactions" << endl;
 
@@ -839,14 +1054,15 @@ void BLTC(double *e_field, double *source_particles, double *target_particles, d
     //    cudaStreamDestroy(streams1[i]);
      //   cudaStreamDestroy(streams2[i]);
      cudaStreamDestroy(streams_far[i]);
+//     cudaStreamDestroy(streams_near[i]);
     }
 
     cout << "Destroyed far streams" << endl;
 
     // This segfaults, but works if we use current_idx instead
-    for (int i=0; i<current_idx; i++){
-        cudaStreamDestroy(streams_near[i]);
-    }
+//    for (int i=0; i<current_idx; i++){
+//        cudaStreamDestroy(streams_near[i]);
+//    }
 
     cout << "Computed BLTC sum" << endl;
 
