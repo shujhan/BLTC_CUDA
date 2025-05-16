@@ -15,6 +15,11 @@ static const int P = 8; // Order of Far-field approximation
 static const int PP = P + 1;
 static const int Pflat = PP;
 static const double MAC = 0.6;
+static const double eps = 1e-1;
+static const double L = 4*pi;
+static const double Linv = 1.0/L;
+static const double epsoverLsq = eps*eps*Linv*Linv;
+static const double ceps = sqrt(1.0 + 4.0 * epsoverLsq);
 
 //static const double eps = 0.1;  // Regularization param
 //
@@ -41,6 +46,23 @@ struct panel
     size_t far_size;
     
 };
+
+typedef struct {
+    size_t target_id;
+    size_t source_id;
+    size_t target_mem_0;
+    size_t source_mem_0;
+    size_t target_size;
+    size_t source_size;
+} tuple6;
+
+typedef struct {
+    size_t target_mem_0;
+    size_t source_mem_0;
+    size_t target_size;
+    size_t source_size;
+} tuple4;
+
 
 // weights size = target_size
 void BLTC(double *e_field, double *source_particles, double *target_particles, double *weights, 

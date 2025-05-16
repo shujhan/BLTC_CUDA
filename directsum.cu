@@ -15,11 +15,11 @@ const double epsoverLsq = eps*eps/(L*L);
 const double Linv = 1.0/L;
 
 //const double ceps = sqrt(1.0);//0.5 * sqrt(1 + 4 * epsoverLsq);
-__device__ inline double kernelp(double x, double y){
-    double z = (x - y) * Linv;
+__device__ inline double kernelp(double x, double y, double3 kernel_params){
+    double z = (x - y) * kernel_params.x;
     z -= round(z);
 //    z -= (z>0.5) - (z<-0.5); No speed difference
-    return 0.5 * z * sqrt(1.0 + 4.0 * epsoverLsq) * rsqrt( z*z + epsoverLsq  ) - z;
+    return 0.5 * z * kernel_params.z * rsqrt( z*z + kernel_params.y  ) - z;
 // Below two lines might be slightly faster/more accurate than the above one (compiler might already be doing this anyways)
 //    return __fma_rz( 0.5*sqrt( __fma_rz(4.0, epsoverLsq, 1.0)  ), z*rsqrt( __fma_rz(z, z, epsoverLsq)  ), -z); 
 //    return fma( 0.5*sqrt(fma(4.0, epsoverLsq, 1.0)  ), z*rsqrt(fma(z, z, epsoverLsq)), -z); 
@@ -40,18 +40,18 @@ double kernels(double x, double y){
 // Dynamic parallel version //
 //////////////////////////////
 // TODO Replace the atomicAdd with a reduce sum over an array, should be a bit faster (less serialization)
-__global__ void direct_e_particle(double *d_efield_p, double *d_particles, double target_loc, double *d_weights, size_t source_size){
+__global__ void direct_e_particle(double *d_efield_p, double *d_particles, double target_loc, double *d_weights, size_t source_size, double3 kernel_params){
     int idx = blockIdx.x*blockDim.x + threadIdx.x;
 
     if (idx >= source_size){return;}
 
-    double local_eval = kernelp(target_loc, d_particles[idx]) * d_weights[idx];
+    double local_eval = kernelp(target_loc, d_particles[idx], kernel_params) * d_weights[idx];
 
     atomicAdd(d_efield_p, local_eval);
 }
 
 __global__ void direct_e_sum_dynamic(double *d_efield, double *d_particles, double *d_target, double *d_weights,
-        size_t source_size, size_t target_size){
+        size_t source_size, size_t target_size, double3 kernel_params){
 
     int idx = blockIdx.x*blockDim.x + threadIdx.x;
 
@@ -63,7 +63,7 @@ __global__ void direct_e_sum_dynamic(double *d_efield, double *d_particles, doub
 
    int blocksize = 1024;
    int gridlen = (source_size + blocksize - 1) / blocksize;
-   direct_e_particle<<<gridlen,blocksize>>>(d_efield + idx, d_particles, target_loc, d_weights, source_size);
+   direct_e_particle<<<gridlen,blocksize>>>(d_efield + idx, d_particles, target_loc, d_weights, source_size, kernel_params);
 }
 
 //////////////////////////////////
@@ -71,7 +71,7 @@ __global__ void direct_e_sum_dynamic(double *d_efield, double *d_particles, doub
 //////////////////////////////////
 
 __global__ void direct_e_sum(double *d_efield, double *d_particles, double *d_target, double *d_weights,
-        const size_t source_size, size_t target_size){
+        const size_t source_size, size_t target_size, double3 kernel_params){
 
    const int idx = blockIdx.x*blockDim.x + threadIdx.x;
 
@@ -82,7 +82,7 @@ __global__ void direct_e_sum(double *d_efield, double *d_particles, double *d_ta
    const double target_loc = d_target[idx];
 
    for (size_t k=0; k<source_size;k++){
-       local_e += kernelp(target_loc, d_particles[k]) * d_weights[k];
+       local_e += kernelp(target_loc, d_particles[k], kernel_params) * d_weights[k];
    }
 
    d_efield[idx] = local_e;
@@ -126,7 +126,7 @@ __global__ void direct_e_sum(double *d_efield, double *d_particles, double *d_ta
 */
 // No significant speedup over non-nested
 __global__ void direct_e_sum_nested(double *d_efield, double *d_particles, double *d_target, double *d_weights,
-        const size_t source_size, size_t target_size){
+        const size_t source_size, size_t target_size, double3 kernel_params){
 
     const int idx_x = blockIdx.x*blockDim.x + threadIdx.x;
     const int idx_y = blockIdx.y*blockDim.y + threadIdx.y;
@@ -136,7 +136,7 @@ __global__ void direct_e_sum_nested(double *d_efield, double *d_particles, doubl
     double local_target = d_particles[idx_x];
     double local_source = d_particles[idx_y];
 
-    double local_eval = kernelp(local_target, local_source) * d_weights[idx_y];
+    double local_eval = kernelp(local_target, local_source, kernel_params) * d_weights[idx_y];
 
     atomicAdd(d_efield + idx_x, local_eval);
 
@@ -168,6 +168,11 @@ void directsum(double *e_field, double *source_particles, double *target_particl
     for(size_t k=0;k<target_size;k++){
         e_field[k] = 0.0;
     }
+
+    double3 kernel_params;
+    kernel_params.x = Linv;
+    kernel_params.y = epsoverLsq;
+    kernel_params.z = sqrt(1.0 + 4.0 * epsoverLsq);
 
 
     // Allocate and transfer data to GPU
@@ -222,17 +227,17 @@ void directsum(double *e_field, double *source_particles, double *target_particl
     if(!nested){
         //cudaDeviceSetLimit(cudaLimitDevRuntimePendingLaunchCount, 32768);
         //direct_e_sum_dynamic<<<gridlen,blocksize>>>(d_efield, d_particles, d_target, d_weights, source_size, target_size);
-        direct_e_sum<<<gridlen,blocksize>>>(d_efield, d_particles, d_target, d_weights, source_size, target_size);
+        direct_e_sum<<<gridlen,blocksize>>>(d_efield, d_particles, d_target, d_weights, source_size, target_size, kernel_params);
 
     }
     else{
-        int blocksize = 32;
+        int blocksize = 16;
         int gridlen = target_size / blocksize;
         if (target_size % blocksize != 0) {gridlen++;}
 
         dim3 grid(gridlen, gridlen, 1);
         dim3 blockdim(blocksize, blocksize, 1);
-        direct_e_sum_nested<<<grid,blockdim>>>(d_efield, d_particles, d_target, d_weights, source_size, target_size);
+        direct_e_sum_nested<<<grid,blockdim>>>(d_efield, d_particles, d_target, d_weights, source_size, target_size, kernel_params);
     }
     errcode = cudaDeviceSynchronize();
     if (errcode != cudaSuccess){
