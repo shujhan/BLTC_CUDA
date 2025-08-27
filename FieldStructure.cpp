@@ -1,16 +1,12 @@
 #include "FieldStructure.hpp"
-#include <cmath>
-#include <cassert>
-#include <cstring>
-#include <sys/times.h>
-// #include <openacc.h>
+
+#include<cmath>
 #include <iostream>
-#include <cfloat> // dbl_min
-#include <cstddef>
+#include <iomanip>
+#include <assert.h>
+#include <vector>
+
 using namespace std;
-#if OPENACC_ENABLED
-#include <accelmath.h>
-#endif
 
 ElectricField::~ElectricField() = default;
 

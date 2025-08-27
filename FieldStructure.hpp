@@ -2,22 +2,12 @@
 #ifndef FIELD_STRUCTURE_HPP
 #define FIELD_STRUCTURE_HPP
 
-#include <algorithm>
-#include <iterator>
-#include <math.h>
-#include <omp.h>
-#include <iostream>
-#include <vector>
+#include<cstddef>
+#include<cfloat>
+#include<cstring>
+
 using std::cout;
 using std::endl;
-#include <cstring>
-#include <cfloat>
-#include <cstddef>
-#include <iomanip>
-#include <cmath>
-#include <sys/times.h>
-#include <cassert>
-#include <fstream>
 
 using namespace std;
 
