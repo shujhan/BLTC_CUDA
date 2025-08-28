@@ -42,7 +42,7 @@ class E_MQ_DirectSum : public ElectricField {
         double epsilon;
         double L;
         void operator() (double *e_field, double *source_particles, double *target_particles, double *weights,
-        size_t source_size, size_t target_size, bool nested);
+        size_t source_size, size_t target_size);
         ~E_MQ_DirectSum();
 
 
